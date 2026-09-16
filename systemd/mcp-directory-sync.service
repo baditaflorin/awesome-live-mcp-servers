@@ -1,0 +1,16 @@
+[Unit]
+Description=DomainScope Awesome MCP Servers Directory Sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/awesome-mcp-servers
+ExecStart=/opt/awesome-mcp-servers/scripts/fleet-sync-cron.sh
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly timer for DomainScope Awesome MCP Servers Sync
+
+[Timer]
+# Runs weekly on Mondays at 00:00 UTC
+OnCalendar=Mon *-*-* 00:00:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

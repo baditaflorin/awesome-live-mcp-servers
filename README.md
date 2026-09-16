@@ -5,9 +5,9 @@
 [![Total Servers](https://img.shields.io/badge/MCP_Servers-138-purple?style=for-the-badge&logo=anthropic)](data/mcp-servers.json)
 [![Live Reachable](https://img.shields.io/badge/Live_Reachable-136%20Online-emerald?style=for-the-badge)](data/mcp-servers.json)
 [![Domains Scanned](https://img.shields.io/badge/Scanned_Corpus-290k+_Domains-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)
-[![Last Auto Sync](https://img.shields.io/badge/Last_Sync-2026-09-16_07:50_UTC-grey?style=for-the-badge)](https://github.com/baditaflorin/awesome-mcp-servers/actions)
+[![CI: Woodpecker](https://img.shields.io/badge/CI-Woodpecker_Self--Hosted-2088FF?style=for-the-badge&logo=linux)](https://ci.0exec.com)
 
-Unlike static lists of local `stdio` scripts, this repository is **automatically crawled, benchmarked, and updated every Monday** by [DomainScope](https://domainscope.scrapetheworld.org) across 13M+ domains to index real, streamable-HTTP and machine-readable `/.well-known/ai-catalog.json` endpoints.
+Unlike static lists of local `stdio` scripts, this repository is **continuously crawled, benchmarked, and updated** by [DomainScope](https://domainscope.scrapetheworld.org) running on self-hosted bare-metal fleet infrastructure (Woodpecker CI & server cron daemons) across 13M+ domains to index real, streamable-HTTP and machine-readable `/.well-known/ai-catalog.json` endpoints.
 
 ---
 
@@ -218,12 +218,13 @@ Autonomous agents (in Cursor, Windsurf, Claude Desktop, Antigravity) can ingest 
 
 ---
 
-## 🔄 Automated Liveness & Weekly Updating
+## 🔄 Automated Liveness & Fleet Updating
 
-This repository runs a scheduled GitHub Action [`.github/workflows/update-mcp-directory.yml`](.github/workflows/update-mcp-directory.yml) every Monday at 00:00 UTC:
-1. Fetches newly discovered MCP domains from [DomainScope's](https://domainscope.scrapetheworld.org) global crawler.
-2. Executes real-world HTTP health probes to detect newly published servers and flag offline endpoints.
-3. Updates `README.md`, `data/mcp-servers.json`, and `data/mcp-servers.csv` automatically.
+This repository is maintained and synchronized on our self-hosted bare-metal infrastructure (Woodpecker CI + systemd automation on `0docker.com` / `0mcp.com`):
+1. **Continuous Crawler**: Ingests newly discovered MCP domains from [DomainScope's](https://domainscope.scrapetheworld.org) 13M+ domain corpus.
+2. **Real-World HTTP Probes**: Verifies endpoint availability, protocol compliance, latency, and tool declarations.
+3. **Local CI/CD Pipeline**: Validated on every commit via [Woodpecker CI](https://ci.0exec.com) ([`.woodpecker.yml`](.woodpecker.yml)).
+4. **Autonomous Sync Daemon**: Scheduled via [`systemd/mcp-directory-sync.timer`](systemd/mcp-directory-sync.timer) executing [`scripts/fleet-sync-cron.sh`](scripts/fleet-sync-cron.sh).
 
 ## 🤝 Contributing & Submitting a Server
 
