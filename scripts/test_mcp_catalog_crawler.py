@@ -5,20 +5,27 @@ Unit tests for DomainScope MCP & AI Manifest Crawler and Batch Pipeline.
 """
 
 import json
+import os
 import shutil
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from scripts.mcp_catalog_crawler import (
     BatchWriter,
+    DatabaseSourceFactory,
     DiscoveredArtifact,
     DomainCrawlResult,
     DomainInspector,
     DomainNormalizer,
     ManifestAnalyzer,
+    PostgresDomainSource,
     ProbeClient,
+    SQLiteDomainSource,
+    load_domains,
+    parse_args,
 )
 
 
@@ -35,6 +42,66 @@ class TestDomainNormalizer(unittest.TestCase):
         self.assertIsNone(DomainNormalizer.normalize("   "))
         self.assertIsNone(DomainNormalizer.normalize("localhost"))
         self.assertIsNone(DomainNormalizer.normalize("invalid string with space"))
+
+
+class TestDatabaseSources(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.sqlite_path = os.path.join(self.temp_dir, "test.db")
+        conn = sqlite3.connect(self.sqlite_path)
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE domains (id INTEGER PRIMARY KEY, name TEXT);")
+        cur.executemany("INSERT INTO domains (name) VALUES (?);", [
+            ("alpha.com",),
+            ("beta.org",),
+            ("gamma.io",),
+            ("delta.ai",),
+        ])
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def test_sqlite_domain_source_stream(self):
+        source = SQLiteDomainSource(self.sqlite_path)
+        domains = list(source.stream_domains())
+        self.assertEqual(domains, ["alpha.com", "beta.org", "gamma.io", "delta.ai"])
+
+    def test_sqlite_domain_source_with_limit_and_offset(self):
+        source = SQLiteDomainSource(self.sqlite_path)
+        domains = list(source.stream_domains(limit=2, offset=1))
+        self.assertEqual(domains, ["beta.org", "gamma.io"])
+
+    def test_sqlite_custom_query(self):
+        source = SQLiteDomainSource(self.sqlite_path)
+        domains = list(source.stream_domains(query="SELECT name FROM domains WHERE name LIKE '%.ai'"))
+        self.assertEqual(domains, ["delta.ai"])
+
+    def test_database_source_factory(self):
+        # SQLite
+        src_sqlite = DatabaseSourceFactory.create(self.sqlite_path)
+        self.assertIsInstance(src_sqlite, SQLiteDomainSource)
+
+        src_sqlite_uri = DatabaseSourceFactory.create(f"sqlite://{self.sqlite_path}")
+        self.assertIsInstance(src_sqlite_uri, SQLiteDomainSource)
+
+        # Postgres
+        src_pg = DatabaseSourceFactory.create("postgres://user:pass@127.0.0.1:5432/testdb")
+        self.assertIsInstance(src_pg, PostgresDomainSource)
+
+    def test_postgres_domain_source_cli_mock(self):
+        source = PostgresDomainSource("postgres://user:pass@localhost:5432/mydb")
+        with patch("shutil.which", return_value="/usr/bin/psql"):
+            with patch("subprocess.Popen") as mock_popen:
+                mock_proc = MagicMock()
+                mock_proc.stdout = ["foo.com\n", "bar.com\n"]
+                mock_proc.wait.return_value = 0
+                mock_proc.returncode = 0
+                mock_popen.return_value = mock_proc
+
+                results = list(source.stream_domains(limit=10))
+                self.assertEqual(results, ["foo.com", "bar.com"])
 
 
 class TestManifestAnalyzer(unittest.TestCase):
@@ -132,11 +199,9 @@ class TestBatchWriterAndCheckpoints(unittest.TestCase):
         completed = writer.load_checkpoint()
         self.assertEqual(len(completed), 0)
 
-        # Save checkpoint
         domains = {"a.com", "b.com"}
         writer.save_checkpoint(domains, 2)
 
-        # Reload
         reloaded = writer.load_checkpoint()
         self.assertEqual(reloaded, domains)
 
@@ -165,23 +230,19 @@ class TestBatchWriterAndCheckpoints(unittest.TestCase):
         writer.record_discovered(res)
         writer.finalize_batches(all_results=[res], total_scanned=1, elapsed_seconds=0.5)
 
-        # Verify JSONL
         self.assertTrue(writer.discovered_file.exists())
         lines = writer.discovered_file.read_text().strip().splitlines()
         self.assertEqual(len(lines), 1)
 
-        # Verify Indexing Batch JSON
         self.assertTrue(writer.indexing_batch_json.exists())
         batch_data = json.loads(writer.indexing_batch_json.read_text())
         self.assertEqual(batch_data["total_domains"], 1)
         self.assertEqual(batch_data["domains"][0]["domain"], "test.ai")
 
-        # Verify Indexing Batch TSV
         self.assertTrue(writer.indexing_batch_tsv.exists())
         tsv_content = writer.indexing_batch_tsv.read_text()
         self.assertIn("test.ai\t1\t0\t0\t4\t120", tsv_content)
 
-        # Verify Summary Report
         self.assertTrue(writer.summary_file.exists())
         summary = json.loads(writer.summary_file.read_text())
         self.assertEqual(summary["total_domains_scanned"], 1)
@@ -191,7 +252,6 @@ class TestBatchWriterAndCheckpoints(unittest.TestCase):
 class TestDomainInspectorMocked(unittest.TestCase):
     def test_inspector_aggregates_artifacts(self):
         client = MagicMock(spec=ProbeClient)
-        # Returns 200 for mcp server card, 404 for others
         def mock_probe(url):
             if "server-card.json" in url:
                 return 200, 110, b'{"name": "Mock", "tools": [{"name": "t1"}]}', {"content-type": "application/json"}

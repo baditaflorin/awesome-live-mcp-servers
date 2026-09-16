@@ -10,6 +10,12 @@ Crawls input domain lists concurrently, probes well-known AI and MCP endpoints:
   - /llms.txt
   - /llms-full.txt
 
+Inputs supported:
+  - Database: PostgreSQL (direct psycopg or streaming psql) or SQLite
+  - Files: Raw text (one domain per line), CSV, TSV
+  - CLI: Space-separated domain arguments
+  - STDIN: Piped domain stream
+
 Validates payloads, tracks response latency, and outputs structured batch files
 for DomainScope queue ingestion and directory indexing. Supports durable checkpoints
 to pause and resume cleanly.
@@ -21,18 +27,22 @@ import argparse
 import csv
 import json
 import os
+import shutil
 import signal
+import sqlite3
 import ssl
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 USER_AGENT = "DomainScope-MCPCrawler/1.0 (+https://domainscope.scrapetheworld.org/mcp-directory)"
 DEFAULT_TIMEOUT = 3.5
@@ -110,7 +120,251 @@ class DomainNormalizer:
 
 
 # ==============================================================================
-# SOLID Component 3: HTTP Probe Client (Single Responsibility)
+# SOLID Component 3: Database Domain Sources (DIP & OCP)
+# ==============================================================================
+
+def load_env_file(path: Optional[Path] = None) -> Dict[str, str]:
+    """Lightweight .env parser without external dependencies."""
+    candidates = [
+        path,
+        Path(".env"),
+        Path("../.env"),
+        Path(__file__).resolve().parent.parent / ".env",
+    ]
+    env_vars: Dict[str, str] = {}
+    for cand in candidates:
+        if cand and cand.is_file():
+            try:
+                for line in cand.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, val = line.split("=", 1)
+                    env_vars[key.strip()] = val.strip().strip("'\"")
+                break
+            except Exception:
+                pass
+    return env_vars
+
+
+class BaseDatabaseSource(ABC):
+    """Abstract interface for database domain sources."""
+
+    @abstractmethod
+    def stream_domains(
+        self,
+        query: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> Iterator[str]:
+        """Streams un-normalized domain strings from database."""
+        pass
+
+
+class SQLiteDomainSource(BaseDatabaseSource):
+    """Fetches domains from a SQLite database file."""
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+
+    def stream_domains(
+        self,
+        query: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> Iterator[str]:
+        if not os.path.exists(self.db_path):
+            raise FileNotFoundError(f"SQLite database file not found: {self.db_path}")
+
+        sql = query or "SELECT name FROM domains"
+        if "LIMIT" not in sql.upper() and limit:
+            sql += f" LIMIT {int(limit)}"
+            if offset:
+                sql += f" OFFSET {int(offset)}"
+        elif "OFFSET" not in sql.upper() and offset:
+            sql += f" OFFSET {int(offset)}"
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute(sql)
+            for row in cur:
+                if row and row[0]:
+                    yield str(row[0])
+        finally:
+            conn.close()
+
+
+class PostgresDomainSource(BaseDatabaseSource):
+    """
+    Fetches domains from PostgreSQL.
+    Adapts automatically between native driver (psycopg / psycopg2) and streaming psql CLI.
+    """
+
+    def __init__(self, dsn: str):
+        self.dsn = dsn
+
+    def stream_domains(
+        self,
+        query: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> Iterator[str]:
+        sql = query or "SELECT name FROM domains"
+        if "LIMIT" not in sql.upper() and limit:
+            sql += f" LIMIT {int(limit)}"
+            if offset:
+                sql += f" OFFSET {int(offset)}"
+        elif "OFFSET" not in sql.upper() and offset:
+            sql += f" OFFSET {int(offset)}"
+
+        # Ensure statement ends with semicolon for CLI compatibility
+        if not sql.rstrip().endswith(";"):
+            sql = sql.rstrip() + ";"
+
+        # Attempt 1: Native psycopg (v3) or psycopg2 if available
+        try:
+            import psycopg  # type: ignore
+            conn = psycopg.connect(self.dsn)
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                for row in cur:
+                    if row and row[0]:
+                        yield str(row[0])
+            conn.close()
+            return
+        except ImportError:
+            pass
+        except Exception as exc:
+            raise RuntimeError(f"PostgreSQL query failed via psycopg: {exc}") from exc
+
+        try:
+            import psycopg2  # type: ignore
+            conn = psycopg2.connect(self.dsn)
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                for row in cur:
+                    if row and row[0]:
+                        yield str(row[0])
+            conn.close()
+            return
+        except ImportError:
+            pass
+        except Exception as exc:
+            raise RuntimeError(f"PostgreSQL query failed via psycopg2: {exc}") from exc
+
+        # Attempt 2: psql CLI streaming adapter
+        psql_path = shutil.which("psql")
+        if psql_path:
+            env = os.environ.copy()
+            env["PGCONNECT_TIMEOUT"] = "5"
+            cmd = [psql_path, self.dsn, "-t", "-A", "-c", sql]
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                env=env,
+            )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                val = line.strip()
+                if val:
+                    yield val
+            proc.wait()
+            if proc.returncode != 0:
+                err = proc.stderr.read() if proc.stderr else "Unknown error"
+                raise RuntimeError(f"psql command failed (code {proc.returncode}): {err.strip()}")
+            return
+
+        # Attempt 3: Docker fallback container
+        docker_path = shutil.which("docker")
+        if docker_path:
+            cmd = [
+                docker_path,
+                "run",
+                "--rm",
+                "-i",
+                "--net=host",
+                "postgres:16-alpine",
+                "psql",
+                self.dsn,
+                "-t",
+                "-A",
+                "-c",
+                sql,
+            ]
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                val = line.strip()
+                if val:
+                    yield val
+            proc.wait()
+            if proc.returncode != 0:
+                err = proc.stderr.read() if proc.stderr else "Unknown error"
+                raise RuntimeError(f"Docker psql failed (code {proc.returncode}): {err.strip()}")
+            return
+
+        raise RuntimeError(
+            "No PostgreSQL driver or CLI found. Please install psycopg2/psycopg, or ensure 'psql' / 'docker' is in PATH."
+        )
+
+
+class DatabaseSourceFactory:
+    """Factory creating the appropriate database domain source."""
+
+    @staticmethod
+    def create(
+        dsn_or_path: Optional[str] = None,
+        env_file_path: Optional[Path] = None,
+    ) -> BaseDatabaseSource:
+        target = dsn_or_path
+
+        # If no explicit connection provided, inspect environment and .env
+        if not target:
+            file_env = load_env_file(env_file_path)
+            target = (
+                os.environ.get("POSTGRES_DSN")
+                or os.environ.get("DATABASE_URL")
+                or file_env.get("POSTGRES_DSN")
+                or file_env.get("DATABASE_URL")
+            )
+            if not target:
+                sqlite_env = os.environ.get("SQLITE_PATH") or file_env.get("SQLITE_PATH")
+                if sqlite_env:
+                    target = sqlite_env
+
+        if not target:
+            raise ValueError(
+                "No database connection specified. Provide --db <dsn> or define POSTGRES_DSN / DATABASE_URL in .env"
+            )
+
+        # Classify by schema / prefix / extension
+        lower = target.lower()
+        if lower.startswith("postgres://") or lower.startswith("postgresql://"):
+            return PostgresDomainSource(target)
+        elif lower.startswith("sqlite://"):
+            clean_path = target[len("sqlite://") :]
+            return SQLiteDomainSource(clean_path)
+        elif lower.endswith(".db") or lower.endswith(".sqlite") or lower.endswith(".sqlite3") or os.path.exists(target):
+            return SQLiteDomainSource(target)
+        elif "host=" in lower or "dbname=" in lower:
+            return PostgresDomainSource(target)
+        else:
+            # Default to Postgres if connection string contains standard parameters
+            return PostgresDomainSource(target)
+
+
+# ==============================================================================
+# SOLID Component 4: HTTP Probe Client (Single Responsibility)
 # ==============================================================================
 
 class ProbeClient:
@@ -140,7 +394,6 @@ class ProbeClient:
             with urllib.request.urlopen(req, timeout=self.timeout, context=self.ssl_context) as resp:
                 elapsed_ms = int((time.perf_counter() - start_time) * 1000)
                 status_code = resp.status
-                # Cap response body read at 256KB to protect memory
                 body = resp.read(256 * 1024)
                 headers = {k.lower(): v for k, v in resp.headers.items()}
                 return status_code, elapsed_ms, body, headers
@@ -158,7 +411,7 @@ class ProbeClient:
 
 
 # ==============================================================================
-# SOLID Component 4: Manifest & Content Analyzer (Single Responsibility)
+# SOLID Component 5: Manifest & Content Analyzer (Single Responsibility)
 # ==============================================================================
 
 class ManifestAnalyzer:
@@ -182,7 +435,6 @@ class ManifestAnalyzer:
         # Case 1: llms.txt or markdown documentation
         if artifact_type in {"llms_txt", "llms_full_txt"}:
             text = body.decode("utf-8", errors="replace")
-            # Basic heuristic: non-empty text, looks like markdown or text
             if len(text.strip()) > 20 and not text.strip().startswith("<!DOCTYPE html"):
                 return DiscoveredArtifact(
                     artifact_type=artifact_type,
@@ -208,7 +460,6 @@ class ManifestAnalyzer:
         description = None
         protocol_version = None
 
-        # Check MCP server card structure
         if artifact_type == "mcp_server_card":
             server_name = payload.get("name") or payload.get("title")
             description = payload.get("description")
@@ -219,7 +470,6 @@ class ManifestAnalyzer:
             elif isinstance(payload.get("capabilities", {}).get("tools"), dict):
                 tools_count = 1
 
-        # Check AI catalog structure
         elif artifact_type == "ai_catalog":
             server_name = payload.get("name") or payload.get("title")
             description = payload.get("description")
@@ -229,7 +479,6 @@ class ManifestAnalyzer:
             elif isinstance(services, dict):
                 tools_count = len(services)
 
-        # Check generic MCP endpoint
         elif artifact_type == "mcp_endpoint":
             server_name = payload.get("name")
             description = payload.get("description")
@@ -252,7 +501,7 @@ class ManifestAnalyzer:
 
 
 # ==============================================================================
-# SOLID Component 5: Domain Inspector (Single Responsibility)
+# SOLID Component 6: Domain Inspector (Single Responsibility)
 # ==============================================================================
 
 class DomainInspector:
@@ -267,7 +516,6 @@ class DomainInspector:
         artifacts: List[DiscoveredArtifact] = []
         latencies: List[int] = []
 
-        # Attempt HTTPS first, fallback to HTTP if needed
         schemes = ["https"]
 
         for path, artifact_type in PROBE_PATHS:
@@ -281,7 +529,7 @@ class DomainInspector:
                     if artifact:
                         artifacts.append(artifact)
                         latencies.append(latency_ms)
-                        break  # Found working scheme for this path, move to next probe
+                        break
 
         has_ai = len(artifacts) > 0
         min_lat = min(latencies) if latencies else None
@@ -315,7 +563,7 @@ class DomainInspector:
 
 
 # ==============================================================================
-# SOLID Component 6: Batch Output Writer & Checkpointer
+# SOLID Component 7: Batch Output Writer & Checkpointer
 # ==============================================================================
 
 class BatchWriter:
@@ -335,7 +583,6 @@ class BatchWriter:
         self.total_processed = 0
 
     def load_checkpoint(self) -> Set[str]:
-        """Loads set of already completed domains."""
         if self.checkpoint_file.exists():
             try:
                 data = json.loads(self.checkpoint_file.read_text(encoding="utf-8"))
@@ -345,14 +592,12 @@ class BatchWriter:
         return set()
 
     def record_discovered(self, result: DomainCrawlResult) -> None:
-        """Appends a discovered result to the JSONL batch file."""
         self.discovered_count += 1
         with self.discovered_file.open("a", encoding="utf-8") as f:
             data = asdict(result)
             f.write(json.dumps(data) + "\n")
 
     def save_checkpoint(self, completed_domains: Set[str], last_index: int) -> None:
-        """Saves current progress atomically."""
         tmp_file = self.checkpoint_file.with_suffix(".tmp")
         payload = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -370,7 +615,6 @@ class BatchWriter:
         total_scanned: int,
         elapsed_seconds: float,
     ) -> None:
-        """Produces consolidated indexing batch files and performance summary."""
         discovered = [r for r in all_results if r.has_ai_presence]
 
         # 1. DomainScope Indexing Batch (JSON format for bulk ingestion API)
@@ -445,7 +689,7 @@ class BatchWriter:
 
 
 # ==============================================================================
-# SOLID Component 7: Orchestrator & CLI Runner
+# SOLID Component 8: Orchestrator & CLI Runner
 # ==============================================================================
 
 class CrawlerOrchestrator:
@@ -464,7 +708,6 @@ class CrawlerOrchestrator:
         self.timeout = timeout
         self.shutdown_requested = False
 
-        # Set up signal handlers for graceful shutdown and checkpointing
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
 
@@ -514,7 +757,6 @@ class CrawlerOrchestrator:
                         arts = [a.artifact_type for a in result.artifacts]
                         print(f"  [+] Discovered: {domain} -> {arts} (lat: {result.min_latency_ms}ms, tools: {result.total_tools_declared})")
 
-                    # Checkpoint every 100 domains
                     if processed_in_run % 100 == 0:
                         self.writer.save_checkpoint(completed_set, idx)
                         sys.stdout.write(f"\r    Progress: {processed_in_run}/{len(unprocessed)} domains inspected ({len(discovered_results)} discovered)...")
@@ -525,9 +767,7 @@ class CrawlerOrchestrator:
                     completed_set.add(domain)
 
         elapsed = time.time() - start_time
-        # Final checkpoint save
         self.writer.save_checkpoint(completed_set, len(self.domains))
-        # Final batch generation
         self.writer.finalize_batches(discovered_results, processed_in_run, elapsed)
 
         print(f"\n[✓] Crawl complete in {elapsed:.1f}s.")
@@ -541,24 +781,57 @@ class CrawlerOrchestrator:
 
 
 # ==============================================================================
-# CLI Entrypoint
+# CLI Entrypoint & Domain Stream Loader
 # ==============================================================================
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="DomainScope MCP & AI Manifest Crawler and Batch Processing Pipeline."
     )
-    parser.add_argument(
+    # Database input options
+    db_group = parser.add_argument_group("Database Input Options")
+    db_group.add_argument(
+        "--from-db",
+        action="store_true",
+        help="Pull input domains directly from database (reads POSTGRES_DSN or DATABASE_URL from .env/env).",
+    )
+    db_group.add_argument(
+        "--db",
+        help="Database connection DSN or path (e.g. postgres://... or sqlite:///path/to/db.sqlite or /path/to/db.db).",
+    )
+    db_group.add_argument(
+        "--db-query",
+        default=None,
+        help="Custom SQL query to select domain names (default: 'SELECT name FROM domains').",
+    )
+    db_group.add_argument(
+        "--db-limit",
+        type=int,
+        default=None,
+        help="Maximum number of rows to select from database.",
+    )
+    db_group.add_argument(
+        "--db-offset",
+        type=int,
+        default=None,
+        help="Pagination offset for database select query.",
+    )
+
+    # File / CLI input options
+    input_group = parser.add_argument_group("File & CLI Input Options")
+    input_group.add_argument(
         "--input",
         "-i",
         help="Path to domain list file (one domain per line or CSV/TSV).",
     )
-    parser.add_argument(
+    input_group.add_argument(
         "--domains",
         "-d",
         nargs="+",
         help="Space-separated list of individual domains to crawl.",
     )
+
+    # Execution & Output options
     parser.add_argument(
         "--output-dir",
         "-o",
@@ -570,7 +843,7 @@ def parse_args() -> argparse.Namespace:
         "-l",
         type=int,
         default=None,
-        help="Maximum number of domains to inspect.",
+        help="Maximum total domains to inspect in this crawl run.",
     )
     parser.add_argument(
         "--concurrency",
@@ -591,10 +864,35 @@ def parse_args() -> argparse.Namespace:
 
 def load_domains(args: argparse.Namespace) -> List[str]:
     raw_domains: List[str] = []
+    normalizer = DomainNormalizer()
+    seen: Set[str] = set()
+    cleaned: List[str] = []
 
+    # Case 1: Ingest from Database
+    if args.from_db or args.db:
+        print(f"[*] Ingesting domains from database...")
+        db_source = DatabaseSourceFactory.create(args.db)
+        count = 0
+        for raw in db_source.stream_domains(
+            query=args.db_query,
+            limit=args.db_limit or args.limit,
+            offset=args.db_offset,
+        ):
+            norm = normalizer.normalize(raw)
+            if norm and norm not in seen:
+                seen.add(norm)
+                cleaned.append(norm)
+                count += 1
+                if args.limit and len(cleaned) >= args.limit:
+                    break
+        print(f"    Selected {count} unique domains from database.")
+        return cleaned
+
+    # Case 2: Individual domains passed via CLI
     if args.domains:
         raw_domains.extend(args.domains)
 
+    # Case 3: Ingest from file
     if args.input:
         in_path = Path(args.input)
         if not in_path.exists():
@@ -603,14 +901,13 @@ def load_domains(args: argparse.Namespace) -> List[str]:
             for line in f:
                 item = line.strip()
                 if item and not item.startswith("#"):
-                    # Check if CSV/TSV
                     if "\t" in item:
                         item = item.split("\t")[0]
                     elif "," in item:
                         item = item.split(",")[0]
                     raw_domains.append(item)
 
-    # Standard fallback: read from STDIN if piped
+    # Case 4: Standard fallback to STDIN if piped
     if not raw_domains and not sys.stdin.isatty():
         for line in sys.stdin:
             item = line.strip()
@@ -618,10 +915,6 @@ def load_domains(args: argparse.Namespace) -> List[str]:
                 raw_domains.append(item)
 
     # Normalize and deduplicate preserving order
-    seen: Set[str] = set()
-    cleaned: List[str] = []
-    normalizer = DomainNormalizer()
-
     for item in raw_domains:
         norm = normalizer.normalize(item)
         if norm and norm not in seen:
@@ -638,8 +931,9 @@ def main() -> int:
     domains = load_domains(args)
 
     if not domains:
-        print("[!] No domains provided. Use --input, --domains, or pipe domains via STDIN.")
-        print("    Example: python3 scripts/mcp_catalog_crawler.py --domains stripe.com huggingface.co cloudflare.com")
+        print("[!] No domains provided. Use --from-db, --db, --input, --domains, or pipe domains via STDIN.")
+        print("    Example (DB):   python3 scripts/mcp_catalog_crawler.py --from-db --limit 100")
+        print("    Example (CLI):  python3 scripts/mcp_catalog_crawler.py --domains stripe.com huggingface.co cloudflare.com")
         return 1
 
     writer = BatchWriter(output_dir=Path(args.output_dir))
