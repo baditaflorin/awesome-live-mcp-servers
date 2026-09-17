@@ -49,6 +49,7 @@ Autonomous agents (in Cursor, Windsurf, Claude Desktop, Antigravity) can ingest 
 ## 📑 Directory of Public MCP Servers
 
 ### 🌐 Search & Web Data Extraction (1)
+- [Statsnet](https://github.com/usenetstate/statsnet-mcp) — Background check any company in the world: registration, executives, courts and finances. Endpoint: `https://statsnet.co/mcp` · Registry: `io.github.usenetstate/statsnet`
 
 | Domain / Server | Status | Latency | Tools | Manifest | Dossier |
 |---|:---:|:---:|:---:|:---:|:---:|
