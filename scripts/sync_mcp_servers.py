@@ -153,11 +153,21 @@ def get_domain_details_fallback(domain):
         "summary": "",
     }
 
+def is_valid_manifest(data):
+    if not isinstance(data, dict):
+        return False
+    if data.get("method") in ("notfound", "error") or data.get("error") is True:
+        return False
+    t = str(data.get("server_title") or data.get("server_name") or data.get("title") or data.get("name") or "").lower()
+    if "не найдена" in t or "page not found" in t or "404" in t:
+        return False
+    return True
+
 def fetch_manifest_details(domain):
     # 1. Try MCP Server Card first (/.well-known/mcp/server-card.json)
     card_url = f"https://{domain}/.well-known/mcp/server-card.json"
     card = fetch_json(card_url, timeout=3)
-    if card and isinstance(card, dict):
+    if is_valid_manifest(card):
         title = card.get("server_title") or card.get("server_name") or card.get("name") or card.get("title") or domain
         desc = card.get("server_description") or card.get("description") or ""
         tools = card.get("tools") or []
@@ -174,7 +184,7 @@ def fetch_manifest_details(domain):
     # 2. Try AI Catalog manifest (/.well-known/ai-catalog.json)
     catalog_url = f"https://{domain}/.well-known/ai-catalog.json"
     cat = fetch_json(catalog_url, timeout=3)
-    if cat and isinstance(cat, dict):
+    if is_valid_manifest(cat):
         servers = cat.get("mcp_servers") or cat.get("services") or cat.get("tools") or []
         title = cat.get("title") or cat.get("name") or domain
         desc = cat.get("description") or ""
@@ -197,7 +207,7 @@ def fetch_manifest_details(domain):
     # 3. Fallback to alternative endpoint (/.well-known/mcp)
     mcp_url = f"https://{domain}/.well-known/mcp"
     mcp_data = fetch_json(mcp_url, timeout=3)
-    if mcp_data and isinstance(mcp_data, dict):
+    if is_valid_manifest(mcp_data):
         title = mcp_data.get("name") or domain
         desc = mcp_data.get("description") or ""
         tools = mcp_data.get("tools") or []
