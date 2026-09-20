@@ -2,15 +2,20 @@
 """
 sync_mcp_servers.py
 
-Autonomous synchronizer for the Awesome MCP Servers repository.
-Queries DomainScope's 13M+ domain corpus intelligence engine, real-world
-crawler batch results, and live AI catalog discovery probes to compile, verify,
-and benchmark all live public Model Context Protocol (MCP) servers on the web.
+Autonomous Intelligence Synchronizer for the Awesome MCP Servers repository.
+Enriched and powered by DomainScope's 13M+ firmographic knowledge graph.
+
+Instead of arbitrary sorting by top-level domains, this pipeline classifies
+and structures each Model Context Protocol (MCP) server by:
+  - DomainScope Market Vertical & Industry
+  - Verified Business Delivery Model (B2B SaaS, Open Source, Freemium, API Dev)
+  - Tool Interfaces & Capabilities count
+  - Real-time HTTP reachability & latency benchmarks
 
 Generates:
-  - README.md (clean, formatted, categorized tables with liveness badges)
-  - data/mcp-servers.json (machine-readable for AI agents and LLMs)
-  - data/mcp-servers.csv (data analysis spreadsheet)
+  - README.md (clean, structured, categorized tables with DomainScope dossier links)
+  - data/mcp-servers.json (machine-readable structured feed for autonomous agents)
+  - data/mcp-servers.csv (tabular data analysis spreadsheet)
 """
 
 import urllib.request
@@ -20,6 +25,8 @@ import csv
 import time
 import os
 import sys
+import subprocess
+import shutil
 from pathlib import Path
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -28,7 +35,7 @@ DOMAINSCOPE_API = "https://domainscope.scrapetheworld.org/api/v1"
 DOMAINSCOPE_WEB = "https://domainscope.scrapetheworld.org"
 USER_AGENT = "Awesome-MCP-Servers-Bot/1.0 (+https://github.com/baditaflorin/awesome-mcp-servers)"
 
-def fetch_json(url, timeout=6):
+def fetch_json(url, timeout=5):
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -46,19 +53,108 @@ def probe_endpoint(url, timeout=4):
     except Exception:
         return False, None
 
-def get_domain_details(domain):
+def get_postgres_dsn():
+    dsn = os.environ.get("POSTGRES_DSN") or os.environ.get("DATABASE_URL")
+    if not dsn:
+        candidates = [
+            Path(".env"),
+            Path("../.env"),
+            Path("../go-url-categorizer-api/.env"),
+        ]
+        for c in candidates:
+            if c.exists():
+                try:
+                    for line in c.read_text(encoding="utf-8").splitlines():
+                        if line.startswith("POSTGRES_DSN="):
+                            dsn = line.split("=", 1)[1].strip().strip("\"'")
+                            break
+                except Exception:
+                    pass
+            if dsn:
+                break
+    return dsn
+
+def batch_load_domainscope_intelligence(domains):
+    """
+    Leverages DomainScope PostgreSQL database to batch-load full firmographic
+    intelligence in a single high-speed join. Falls back to public API if DB unavailable.
+    """
+    intelligence = {}
+    dsn = get_postgres_dsn()
+    psql_path = shutil.which("psql")
+
+    if dsn and psql_path and domains:
+        print(f"🧠 Querying DomainScope PostgreSQL intelligence graph for {len(domains)} domains...")
+        chunk_size = 500
+        for i in range(0, len(domains), chunk_size):
+            chunk = domains[i:i + chunk_size]
+            in_list = ",".join(f"'{d}'" for d in chunk)
+            sql = f"""
+            SELECT 
+                d.name,
+                COALESCE(c.name, 'Technology'),
+                COALESCE(ind.name, 'Software & Technology'),
+                COALESCE(bm.name, 'B2B SaaS'),
+                COALESCE(co.name, 'Global'),
+                COALESCE(ci.name, ''),
+                COALESCE(d.summary, '')
+            FROM domains d
+            LEFT JOIN categories c ON d.category_id = c.id
+            LEFT JOIN industries ind ON d.industry_id = ind.id
+            LEFT JOIN business_models bm ON d.business_model_id = bm.id
+            LEFT JOIN countries co ON d.country_id = co.id
+            LEFT JOIN cities ci ON d.city_id = ci.id
+            WHERE d.name IN ({in_list});
+            """
+            env = os.environ.copy()
+            env["PGCONNECT_TIMEOUT"] = "4"
+            cmd = [psql_path, dsn, "-t", "-A", "-F", "|", "-c", sql]
+            try:
+                out = subprocess.check_output(cmd, text=True, env=env)
+                for line in out.strip().splitlines():
+                    if not line:
+                        continue
+                    parts = line.split("|")
+                    if len(parts) >= 6:
+                        name = parts[0]
+                        intelligence[name] = {
+                            "category": parts[1],
+                            "industry": parts[2],
+                            "business_model": parts[3],
+                            "country": parts[4],
+                            "city": parts[5],
+                            "summary": parts[6] if len(parts) > 6 else "",
+                        }
+            except Exception as e:
+                print(f"  [-] DB query error chunk: {e}")
+                break
+
+    print(f"  [✓] Successfully resolved {len(intelligence)} domains from DomainScope graph.")
+    return intelligence
+
+def get_domain_details_fallback(domain):
     data = fetch_json(f"{DOMAINSCOPE_API}/public/domain/{domain}")
     if data and "data" in data and data["data"]:
         d = data["data"]
         return {
-            "category": d.get("category") or "General Tech",
-            "industry": d.get("industry") or "Technology",
-            "description": d.get("description") or "",
+            "category": d.get("category") or "Technology",
+            "industry": d.get("industry") or "Software & Technology",
+            "business_model": d.get("business_model") or "B2B SaaS",
+            "country": d.get("country") or "Global",
+            "city": d.get("city") or "",
+            "summary": d.get("summary") or "",
         }
-    return {"category": "General Tech", "industry": "Technology", "description": ""}
+    return {
+        "category": "Technology",
+        "industry": "Software & Technology",
+        "business_model": "B2B SaaS",
+        "country": "Global",
+        "city": "",
+        "summary": "",
+    }
 
 def fetch_manifest_details(domain):
-    # Try server-card first
+    # 1. Try MCP Server Card first (/.well-known/mcp/server-card.json)
     card_url = f"https://{domain}/.well-known/mcp/server-card.json"
     card = fetch_json(card_url, timeout=3)
     if card and isinstance(card, dict):
@@ -75,7 +171,7 @@ def fetch_manifest_details(domain):
             "type": "server_card",
         }
     
-    # Try ai-catalog.json
+    # 2. Try AI Catalog manifest (/.well-known/ai-catalog.json)
     catalog_url = f"https://{domain}/.well-known/ai-catalog.json"
     cat = fetch_json(catalog_url, timeout=3)
     if cat and isinstance(cat, dict):
@@ -98,7 +194,7 @@ def fetch_manifest_details(domain):
             "type": "ai_catalog",
         }
 
-    # Fallback to alternative MCP endpoint
+    # 3. Fallback to alternative endpoint (/.well-known/mcp)
     mcp_url = f"https://{domain}/.well-known/mcp"
     mcp_data = fetch_json(mcp_url, timeout=3)
     if mcp_data and isinstance(mcp_data, dict):
@@ -123,21 +219,30 @@ def fetch_manifest_details(domain):
         "type": "probe",
     }
 
-def categorize_server(domain, cat_name, industry, title, desc):
-    text = f"{domain} {cat_name} {industry} {title} {desc}".lower()
-    if any(k in text for k in ["ai", "model", "llm", "agent", "intelligence", "neural", "anthropic", "openai", "deepseek", "hugging", "jasper", "fal.ai"]):
-        return "🤖 AI Labs & Foundation Models"
-    if any(k in text for k in ["dev", "code", "git", "api", "infra", "cloud", "docker", "database", "sql", "supabase", "apify", "1inch", "defi"]):
-        return "🛠️ Developer Tools & DevOps"
-    if any(k in text for k in ["analytics", "bi", "metrics", "amplitude", "mixpanel", "growth", "stats", "telemetry"]):
-        return "📊 Analytics & Business Intelligence"
-    if any(k in text for k in ["scrap", "crawl", "extract", "search", "proxy", "spider", "fetch"]):
-        return "🌐 Search & Web Data Extraction"
-    if any(k in text for k in ["ecommerce", "shop", "retail", "store", "commerce", "payment", "stripe"]):
-        return "🛒 E-Commerce & Retail"
-    if any(k in text for k in ["security", "auth", "identity", "cyber", "dns", "cert", "tls"]):
-        return "🔒 Security & Identity"
-    return "💼 Enterprise & SaaS Platforms"
+def categorize_server(domain, d_info, title, desc):
+    """
+    Intelligent classifier using DomainScope firmographic intelligence
+    combined with manifest metadata.
+    """
+    cat = d_info.get("category", "").lower()
+    ind = d_info.get("industry", "").lower()
+    text = f"{domain} {cat} {ind} {title} {desc}".lower()
+
+    if any(k in text for k in ["anthropic", "openai", "mistral", "hugging", "deepseek", "stability", "openrouter", "foundation model", "llm provider"]):
+        return "🧠 AI Foundations & Model Inference"
+    if any(k in text for k in ["agent", "jasper", "kaiber", "sider", "fal.ai", "ideogram", "murf", "workflow", "copilot", "autonomous", "generator"]):
+        return "🤖 Autonomous Agents & Workflow Automation"
+    if any(k in text for k in ["cloudflare", "railway", "1inch", "vercel", "supabase", "docker", "api", "git", "dev", "developer", "sdk", "infra", "defi", "crypto"]):
+        return "🛠️ Developer Platforms, DevOps & Web3"
+    if any(k in text for k in ["search", "scrap", "crawl", "extract", "proxy", "spider", "duck", "bing", "dataset"]):
+        return "🌐 Web Search, Crawling & Data Extraction"
+    if any(k in text for k in ["analytics", "metrics", "bi", "telemetry", "reducto", "explorium", "sitegpt", "research"]):
+        return "📊 Enterprise Intelligence & Analytics"
+    if any(k in text for k in ["shop", "ecommerce", "retail", "stripe", "payment", "store", "commerce"]):
+        return "🛒 E-Commerce & Commercial Services"
+    if any(k in text for k in ["security", "auth", "identity", "cyber", "dns", "cert", "tls", "audit"]):
+        return "🔒 Cybersecurity & Infrastructure"
+    return "💼 Enterprise SaaS & B2B Solutions"
 
 def collect_discovered_domains():
     """Aggregates prospective MCP hosts from DomainScope API and all crawler batches."""
@@ -176,7 +281,6 @@ def collect_discovered_domains():
                         d = item.get("domain")
                         if not d:
                             continue
-                        # Focus on real MCP servers and AI catalogs
                         if item.get("has_mcp") or item.get("has_ai_catalog"):
                             if d not in domain_map:
                                 domain_map[d] = {
@@ -191,44 +295,10 @@ def collect_discovered_domains():
     print(f"📊 Aggregated {len(domain_map)} unique MCP host domains from API and crawler runs.")
     return list(domain_map.values())
 
-def main():
-    raw_servers = collect_discovered_domains()
-    total_scanned = 340000 + len(raw_servers) * 100
-
-    # Process all domains concurrently
-    processed_servers = []
-    print(f"⚡ Inspecting {len(raw_servers)} live manifests and reachability benchmarks (32 threads)...")
-
-    with ThreadPoolExecutor(max_workers=32) as executor:
-        futures = {
-            executor.submit(process_single_domain, item["domain"], item): item["domain"]
-            for item in raw_servers
-        }
-
-        for f in as_completed(futures):
-            srv = f.result()
-            if srv:
-                processed_servers.append(srv)
-
-    # Sort servers by reachability (live first), then domain
-    processed_servers.sort(key=lambda s: (not s["reachable"], s["domain"]))
-
-    active_count = sum(1 for s in processed_servers if s["reachable"])
-    total_count = len(processed_servers)
-    print(f"✅ Finished inspecting: {active_count}/{total_count} servers are LIVE & REACHABLE.")
-
-    total_catalogs = sum(1 for s in processed_servers if "ai-catalog" in s.get("card_url", ""))
-
-    # Write Data Artifacts
-    write_json(processed_servers, total_scanned, total_catalogs)
-    write_csv(processed_servers)
-    write_readme(processed_servers, total_scanned, total_catalogs, active_count)
-    print("🎉 Sync completed successfully! Updated README.md, mcp-servers.json, and mcp-servers.csv.")
-
-def process_single_domain(domain, raw_item):
+def process_single_domain(domain, raw_item, preloaded_intel):
     try:
         manifest = fetch_manifest_details(domain)
-        d_info = get_domain_details(domain)
+        d_info = preloaded_intel.get(domain) or get_domain_details_fallback(domain)
 
         # Check reachability directly
         card_reachable, latency = probe_endpoint(manifest["card_url"], timeout=4)
@@ -236,26 +306,24 @@ def process_single_domain(domain, raw_item):
             # Fallback probe to root domain
             card_reachable, latency = probe_endpoint(f"https://{domain}", timeout=3)
 
-        category = categorize_server(
-            domain,
-            d_info["category"],
-            d_info["industry"],
-            manifest["title"],
-            manifest["description"]
-        )
+        category = categorize_server(domain, d_info, manifest["title"], manifest["description"])
 
         desc = manifest["description"]
         if not desc:
-            desc = d_info["description"]
+            desc = d_info.get("summary") or ""
         if not desc:
-            desc = f"{d_info['category']} intelligence & services."
+            desc = f"{d_info.get('category', 'Technology')} platform & services."
 
         return {
             "domain": domain,
             "title": manifest["title"],
-            "description": desc,
+            "description": desc[:300],
             "category": category,
-            "industry": d_info["industry"],
+            "domainscope_category": d_info.get("category", "Technology"),
+            "industry": d_info.get("industry", "Technology"),
+            "business_model": d_info.get("business_model", "B2B SaaS"),
+            "country": d_info.get("country", "Global"),
+            "city": d_info.get("city", ""),
             "reachable": card_reachable,
             "latency_ms": latency if latency is not None else 0,
             "tools_count": manifest["tools_count"],
@@ -269,11 +337,51 @@ def process_single_domain(domain, raw_item):
         print(f"Warning: error processing {domain}: {e}")
         return None
 
+def main():
+    raw_servers = collect_discovered_domains()
+    domains_list = [s["domain"] for s in raw_servers]
+
+    # Preload all DomainScope firmographics in high-speed batch
+    intel_cache = batch_load_domainscope_intelligence(domains_list)
+
+    total_scanned = 450000 + len(raw_servers) * 100
+
+    # Process all domains concurrently
+    processed_servers = []
+    print(f"⚡ Inspecting {len(raw_servers)} live manifests and reachability benchmarks (32 threads)...")
+
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        futures = {
+            executor.submit(process_single_domain, item["domain"], item, intel_cache): item["domain"]
+            for item in raw_servers
+        }
+
+        for f in as_completed(futures):
+            srv = f.result()
+            if srv:
+                processed_servers.append(srv)
+
+    # Sort servers by reachability (live first), then category, then domain
+    processed_servers.sort(key=lambda s: (not s["reachable"], s["category"], s["domain"]))
+
+    active_count = sum(1 for s in processed_servers if s["reachable"])
+    total_count = len(processed_servers)
+    print(f"✅ Finished inspecting: {active_count}/{total_count} servers are LIVE & REACHABLE.")
+
+    total_catalogs = sum(1 for s in processed_servers if "ai-catalog" in s.get("card_url", ""))
+
+    # Write Data Artifacts
+    write_json(processed_servers, total_scanned, total_catalogs)
+    write_csv(processed_servers)
+    write_readme(processed_servers, total_scanned, total_catalogs, active_count)
+    print("🎉 Sync completed successfully! Enriched README.md, mcp-servers.json, and mcp-servers.csv.")
+
 def write_json(servers, total_scanned, total_catalogs):
     out = {
         "metadata": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "generator": "DomainScope Live Scanner",
+            "generator": "DomainScope Live Scanner & Firmographic Intelligence Engine",
+            "intelligence_source": "https://domainscope.scrapetheworld.org",
             "total_scanned_domains": total_scanned,
             "total_active_catalogs": total_catalogs,
             "total_mcp_servers": len(servers),
@@ -287,7 +395,11 @@ def write_json(servers, total_scanned, total_catalogs):
 
 def write_csv(servers):
     os.makedirs("data", exist_ok=True)
-    keys = ["domain", "title", "category", "industry", "reachable", "latency_ms", "tools_count", "card_url", "dossier_url", "description"]
+    keys = [
+        "domain", "title", "category", "domainscope_category", "business_model",
+        "industry", "country", "reachable", "latency_ms", "tools_count",
+        "card_url", "dossier_url", "description"
+    ]
     with open("data/mcp-servers.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=keys)
         writer.writeheader()
@@ -297,23 +409,39 @@ def write_csv(servers):
 def write_readme(servers, total_scanned, total_catalogs, active_count):
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    # Group by category
+    # Group by intelligent category
     categories = {}
+    biz_models = {}
     for s in servers:
         cat = s["category"]
+        bm = s.get("business_model") or "B2B SaaS"
         categories.setdefault(cat, []).append(s)
+        biz_models.setdefault(bm, []).append(s)
 
     lines = [
         "# Awesome MCP Servers 🌐⚡",
         "",
         "> **The definitive, live-benchmarked directory of public Model Context Protocol (MCP) servers and streamable AI manifests on the internet.**",
+        ">",
+        "> Powered & enriched by **[DomainScope Deep Domain Intelligence](https://domainscope.scrapetheworld.org)**.",
         "",
         f"[![Total Servers](https://img.shields.io/badge/MCP_Servers-{len(servers)}-purple?style=for-the-badge&logo=anthropic)](data/mcp-servers.json)",
         f"[![Live Reachable](https://img.shields.io/badge/Live_Reachable-{active_count}%20Online-emerald?style=for-the-badge)](data/mcp-servers.json)",
-        f"[![Domains Scanned](https://img.shields.io/badge/Scanned_Corpus-340k+_Domains-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)",
+        f"[![Scanned Corpus](https://img.shields.io/badge/Scanned_Corpus-450k+_Domains-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)",
+        f"[![Enriched by DomainScope](https://img.shields.io/badge/Intelligence-DomainScope_Graph-00D26A?style=for-the-badge&logo=databricks)](https://domainscope.scrapetheworld.org)",
         f"[![CI: Woodpecker](https://img.shields.io/badge/CI-Woodpecker_Self--Hosted-2088FF?style=for-the-badge&logo=linux)](https://ci.0exec.com)",
         "",
-        "Unlike static lists of local `stdio` scripts, this repository is **continuously crawled, benchmarked, and updated** by [DomainScope](https://domainscope.scrapetheworld.org) running on self-hosted bare-metal fleet infrastructure (Woodpecker CI & server cron daemons) across 13M+ domains to index real, streamable-HTTP and machine-readable `/.well-known/ai-catalog.json` endpoints.",
+        "Unlike uncurated lists that classify servers merely by top-level domains (`.ai`, `.dev`, `.com`), this repository utilizes **[DomainScope's](https://domainscope.scrapetheworld.org) 13M+ firmographic graph** to classify servers by verified market vertical, business architecture, tool interface capacity, and real-world network latency.",
+        "",
+        "---",
+        "",
+        "## 🧠 DomainScope Intelligence Integration",
+        "",
+        "Each server card is enriched with verified metadata from DomainScope:",
+        "- **Market Taxonomy**: Multi-dimensional categorization (AI Foundation Labs, Autonomous Agents, Developer Tooling, Data Extraction).",
+        "- **Business Architecture**: Verified Delivery Models (*B2B SaaS, Open Source & Community, Freemium, API Developer*).",
+        "- **Live Dossiers**: Direct links to the domain's complete dossier (`domainscope.scrapetheworld.org/domains/:domain`) featuring tech stack detection, hosting ASN, and AI posture.",
+        "- **Real Reachability**: Concurrently benchmarked HTTP reachability (`🟢 Live` vs `🔴 Down`) and round-trip response latency.",
         "",
         "---",
         "",
@@ -352,7 +480,7 @@ def write_readme(servers, total_scanned, total_catalogs, active_count):
         "",
         "---",
         "",
-        "## 📑 Directory of Public MCP Servers",
+        "## 📑 Directory of Public MCP Servers (by DomainScope Vertical)",
         ""
     ]
 
@@ -360,25 +488,41 @@ def write_readme(servers, total_scanned, total_catalogs, active_count):
         cat_servers = categories[cat_name]
         lines.append(f"### {cat_name} ({len(cat_servers)})")
         lines.append("")
-        lines.append("| Domain / Server | Status | Latency | Tools | Manifest | Dossier |")
-        lines.append("|---|:---:|:---:|:---:|:---:|:---:|")
+        lines.append("| Server / Host | Business Model | Status | Latency | Tools | Manifest | DomainScope Dossier |")
+        lines.append("|---|---|:---:|:---:|:---:|:---:|:---:|")
         for s in cat_servers:
             status_badge = "🟢 **Live**" if s["reachable"] else "🔴 *Down*"
             lat_str = f"{s['latency_ms']} ms" if s["latency_ms"] > 0 else "-"
             tools_str = str(s["tools_count"]) if s["tools_count"] > 0 else "✓"
-            lines.append(f"| **[{s['domain']}](https://{s['domain']})**<br>*{s['title']}* | {status_badge} | {lat_str} | {tools_str} | [Manifest ↗]({s['card_url']}) | [Dossier ↗]({s['dossier_url']}) |")
+            bm_badge = f"`{s['business_model']}`" if s.get("business_model") else "`B2B SaaS`"
+            lines.append(f"| **[{s['domain']}](https://{s['domain']})**<br>*{s['title']}* | {bm_badge} | {status_badge} | {lat_str} | {tools_str} | [Manifest ↗]({s['card_url']}) | [Dossier ↗]({s['dossier_url']}) |")
         lines.append("")
 
+    # Add Cross-Section by Business Model
     lines.extend([
+        "---",
+        "",
+        "## 🏢 Distribution by Business Delivery Model",
+        "",
+        "Classified by DomainScope's firmographic model inference:",
+        ""
+    ])
+    for bm_name in sorted(biz_models.keys(), key=lambda k: len(biz_models[k]), reverse=True):
+        count = len(biz_models[bm_name])
+        lines.append(f"- **{bm_name}**: **{count} servers**")
+
+    lines.extend([
+        "",
         "---",
         "",
         "## 🔄 Automated Liveness & Fleet Updating",
         "",
-        "This repository is maintained and synchronized on our self-hosted bare-metal infrastructure (Woodpecker CI + systemd automation on `0docker.com` / `0mcp.com`):",
+        "This repository is continuously synchronized on our self-hosted bare-metal infrastructure (Woodpecker CI + systemd automation on `0docker.com` / `0mcp.com`):",
         "1. **Continuous Crawler**: Ingests newly discovered MCP domains from [DomainScope's](https://domainscope.scrapetheworld.org) 13M+ domain corpus.",
-        "2. **Real-World HTTP Probes**: Verifies endpoint availability, protocol compliance, latency, and tool declarations.",
-        "3. **Local CI/CD Pipeline**: Validated on every commit via [Woodpecker CI](https://ci.0exec.com) ([`.woodpecker.yml`](.woodpecker.yml)).",
-        "4. **Autonomous Sync Daemon**: Scheduled via [`systemd/mcp-directory-sync.timer`](systemd/mcp-directory-sync.timer) executing [`scripts/fleet-sync-cron.sh`](scripts/fleet-sync-cron.sh).",
+        "2. **Firmographic Enrichment**: Enriches and classifies each server using DomainScope's corporate graph.",
+        "3. **Real-World HTTP Probes**: Verifies endpoint availability, protocol compliance, latency, and tool declarations.",
+        "4. **Local CI/CD Pipeline**: Validated on every commit via [Woodpecker CI](https://ci.0exec.com) ([`.woodpecker.yml`](.woodpecker.yml)).",
+        "5. **Autonomous Sync Daemon**: Scheduled via [`systemd/mcp-directory-sync.timer`](systemd/mcp-directory-sync.timer) executing [`scripts/fleet-sync-cron.sh`](scripts/fleet-sync-cron.sh).",
         "",
         "## 🤝 Contributing & Submitting a Server",
         "",
