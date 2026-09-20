@@ -49,7 +49,28 @@ def probe_endpoint(url, timeout=4):
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             elapsed_ms = int((time.time() - start) * 1000)
-            return resp.status == 200, elapsed_ms
+            return resp.status in (200, 204), elapsed_ms
+    except urllib.error.HTTPError as e:
+        elapsed_ms = int((time.time() - start) * 1000)
+        if e.code == 405:
+            # Method Not Allowed: probe remote streamable HTTP endpoint with JSON-RPC POST
+            try:
+                post_data = b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+                post_req = urllib.request.Request(
+                    url,
+                    data=post_data,
+                    headers={"User-Agent": USER_AGENT, "Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(post_req, timeout=timeout) as post_resp:
+                    post_elapsed_ms = int((time.time() - start) * 1000)
+                    return post_resp.status in (200, 204), post_elapsed_ms
+            except urllib.error.HTTPError as post_e:
+                post_elapsed_ms = int((time.time() - start) * 1000)
+                if post_e.code in (200, 204, 401, 403):
+                    return True, post_elapsed_ms
+        elif e.code in (401, 403):
+            return True, elapsed_ms
+        return False, None
     except Exception:
         return False, None
 
@@ -255,8 +276,40 @@ def categorize_server(domain, d_info, title, desc):
     return "💼 Enterprise SaaS & B2B Solutions"
 
 def collect_discovered_domains():
-    """Aggregates prospective MCP hosts from DomainScope API and all crawler batches."""
+    """Aggregates prospective MCP hosts from community submissions, DomainScope API, and all crawler batches."""
     domain_map = {}
+
+    # 0. Load community & curated MCP servers (from GitHub issues, maintainers, submissions)
+    community_files = [
+        Path("data/community_mcp_servers.json"),
+        Path("../awesome-mcp-servers/data/community_mcp_servers.json"),
+    ]
+    for cpath in community_files:
+        if cpath.exists():
+            try:
+                with open(cpath, "r", encoding="utf-8") as f:
+                    cdata = json.load(f)
+                for item in cdata:
+                    d = item.get("domain")
+                    if d:
+                        domain_map[d] = {
+                            "domain": d,
+                            "title": item.get("title"),
+                            "description": item.get("description"),
+                            "card_url": item.get("card_url"),
+                            "repo_url": item.get("repo_url"),
+                            "docs_url": item.get("docs_url"),
+                            "registry": item.get("registry"),
+                            "package": item.get("package"),
+                            "category": item.get("category"),
+                            "tools_count": item.get("tools_count", 1),
+                            "transport": item.get("transport"),
+                            "server_count": 1,
+                            "artifact_count": 1,
+                            "source": item.get("source", "community"),
+                        }
+            except Exception as exc:
+                print(f"  [-] Error reading {cpath}: {exc}")
 
     # 1. Query live DomainScope AI Ecosystem endpoint
     print("🚀 Querying DomainScope AI Ecosystem API...")
@@ -265,7 +318,7 @@ def collect_discovered_domains():
         data = res["data"]
         for item in data.get("top_mcp_domains", []):
             d = item.get("domain")
-            if d:
+            if d and d not in domain_map:
                 domain_map[d] = {
                     "domain": d,
                     "server_count": item.get("server_count", 1),
@@ -302,7 +355,7 @@ def collect_discovered_domains():
                 except Exception as exc:
                     print(f"  [-] Error reading {jpath}: {exc}")
 
-    print(f"📊 Aggregated {len(domain_map)} unique MCP host domains from API and crawler runs.")
+    print(f"📊 Aggregated {len(domain_map)} unique MCP host domains from community, API and crawler runs.")
     return list(domain_map.values())
 
 def process_single_domain(domain, raw_item, preloaded_intel):
@@ -310,15 +363,20 @@ def process_single_domain(domain, raw_item, preloaded_intel):
         manifest = fetch_manifest_details(domain)
         d_info = preloaded_intel.get(domain) or get_domain_details_fallback(domain)
 
-        # Check reachability directly
-        card_reachable, latency = probe_endpoint(manifest["card_url"], timeout=4)
+        title = raw_item.get("title") or manifest["title"]
+        desc = raw_item.get("description") or manifest["description"]
+        card_url = raw_item.get("card_url") or manifest["card_url"]
+        tools_count = raw_item.get("tools_count") if "tools_count" in raw_item else manifest["tools_count"]
+        category_override = raw_item.get("category")
+
+        # Check reachability directly on manifest or remote endpoint
+        card_reachable, latency = probe_endpoint(card_url, timeout=4)
         if not card_reachable:
             # Fallback probe to root domain
             card_reachable, latency = probe_endpoint(f"https://{domain}", timeout=3)
 
-        category = categorize_server(domain, d_info, manifest["title"], manifest["description"])
+        category = category_override or categorize_server(domain, d_info, title, desc)
 
-        desc = manifest["description"]
         if not desc:
             desc = d_info.get("summary") or ""
         if not desc:
@@ -326,7 +384,7 @@ def process_single_domain(domain, raw_item, preloaded_intel):
 
         return {
             "domain": domain,
-            "title": manifest["title"],
+            "title": title,
             "description": desc[:300],
             "category": category,
             "domainscope_category": d_info.get("category", "Technology"),
@@ -336,12 +394,18 @@ def process_single_domain(domain, raw_item, preloaded_intel):
             "city": d_info.get("city", ""),
             "reachable": card_reachable,
             "latency_ms": latency if latency is not None else 0,
-            "tools_count": manifest["tools_count"],
-            "version": manifest["version"],
-            "card_url": manifest["card_url"],
+            "tools_count": tools_count,
+            "version": manifest.get("version", "1.0"),
+            "card_url": card_url,
+            "repo_url": raw_item.get("repo_url", ""),
+            "docs_url": raw_item.get("docs_url", ""),
+            "registry": raw_item.get("registry", ""),
+            "package": raw_item.get("package", ""),
+            "transport": raw_item.get("transport", ""),
             "server_count": raw_item.get("server_count", 1),
             "artifact_count": raw_item.get("artifact_count", 0),
-            "dossier_url": f"{DOMAINSCOPE_WEB}/domains/{domain}"
+            "dossier_url": f"{DOMAINSCOPE_WEB}/domains/{domain}",
+            "source": raw_item.get("source", "crawler-batch"),
         }
     except Exception as e:
         print(f"Warning: error processing {domain}: {e}")
@@ -408,7 +472,7 @@ def write_csv(servers):
     keys = [
         "domain", "title", "category", "domainscope_category", "business_model",
         "industry", "country", "reachable", "latency_ms", "tools_count",
-        "card_url", "dossier_url", "description"
+        "card_url", "repo_url", "docs_url", "registry", "transport", "dossier_url", "description"
     ]
     with open("data/mcp-servers.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=keys)
@@ -505,7 +569,8 @@ def write_readme(servers, total_scanned, total_catalogs, active_count):
             lat_str = f"{s['latency_ms']} ms" if s["latency_ms"] > 0 else "-"
             tools_str = str(s["tools_count"]) if s["tools_count"] > 0 else "✓"
             bm_badge = f"`{s['business_model']}`" if s.get("business_model") else "`B2B SaaS`"
-            lines.append(f"| **[{s['domain']}](https://{s['domain']})**<br>*{s['title']}* | {bm_badge} | {status_badge} | {lat_str} | {tools_str} | [Manifest ↗]({s['card_url']}) | [Dossier ↗]({s['dossier_url']}) |")
+            repo_link = f" • [Repo ↗]({s['repo_url']})" if s.get("repo_url") else ""
+            lines.append(f"| **[{s['domain']}](https://{s['domain']})**<br>*{s['title']}*{repo_link} | {bm_badge} | {status_badge} | {lat_str} | {tools_str} | [Manifest ↗]({s['card_url']}) | [Dossier ↗]({s['dossier_url']}) |")
         lines.append("")
 
     # Add Cross-Section by Business Model

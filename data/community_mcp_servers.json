@@ -1,0 +1,29 @@
+[
+  {
+    "domain": "kleap.co",
+    "title": "Kleap",
+    "description": "Website infrastructure for AI agents \u2014 create, edit, and publish real websites via MCP with a verified-live guarantee.",
+    "card_url": "https://kleap.co/api/mcp",
+    "repo_url": "https://github.com/kleaphq/cli",
+    "docs_url": "https://kleap.co/mcp",
+    "registry": "io.github.kleaphq/kleap",
+    "package": "npm: kleap-cli",
+    "category": "\ud83d\udee0\ufe0f Developer Platforms, DevOps & Web3",
+    "tools_count": 26,
+    "transport": "Streamable HTTP / JSON-RPC",
+    "source": "community-issue-2"
+  },
+  {
+    "domain": "robot-speed.com",
+    "title": "Robot Speed",
+    "description": "SEO tools and audit infrastructure for AI agents \u2014 audits, Core Web Vitals, keywords, AI visibility, traffic, backlinks, CMS publishing.",
+    "card_url": "https://www.robot-speed.com/api/mcp",
+    "repo_url": "https://github.com/robot-speed/mcp",
+    "docs_url": "https://www.robot-speed.com/mcp",
+    "registry": "io.github.robot-speed/mcp",
+    "category": "\ud83d\udcca Enterprise Intelligence & Analytics",
+    "tools_count": 12,
+    "transport": "Streamable HTTP / JSON-RPC (Free tools + OAuth)",
+    "source": "community-issue-2"
+  }
+]
