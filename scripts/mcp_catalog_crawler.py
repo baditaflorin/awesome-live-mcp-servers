@@ -53,6 +53,7 @@ PROBE_PATHS = [
     ("/.well-known/mcp/server-card.json", "mcp_server_card"),
     ("/.well-known/ai-catalog.json", "ai_catalog"),
     ("/.well-known/mcp", "mcp_endpoint"),
+    ("/api/mcp", "mcp_endpoint"),
     ("/llms.txt", "llms_txt"),
     ("/llms-full.txt", "llms_full_txt"),
 ]
@@ -399,6 +400,34 @@ class ProbeClient:
                 return status_code, elapsed_ms, body, headers
         except urllib.error.HTTPError as exc:
             elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            if exc.code == 405:
+                # 405 Method Not Allowed: Try JSON-RPC POST
+                try:
+                    post_req = urllib.request.Request(
+                        url,
+                        data=b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+                        headers={
+                            "User-Agent": self.user_agent,
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                            "Connection": "close",
+                        },
+                    )
+                    with urllib.request.urlopen(post_req, timeout=self.timeout, context=self.ssl_context) as post_resp:
+                        post_elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                        post_body = post_resp.read(256 * 1024)
+                        post_headers = {k.lower(): v for k, v in post_resp.headers.items()}
+                        return post_resp.status, post_elapsed_ms, post_body, post_headers
+                except urllib.error.HTTPError as post_exc:
+                    post_elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                    body = b""
+                    try:
+                        body = post_exc.read(8 * 1024)
+                    except Exception:
+                        pass
+                    return post_exc.code, post_elapsed_ms, body, {}
+                except Exception:
+                    pass
             body = b""
             try:
                 body = exc.read(8 * 1024)
@@ -426,11 +455,27 @@ class ManifestAnalyzer:
         body: bytes,
         headers: Dict[str, str],
     ) -> Optional[DiscoveredArtifact]:
-        if status_code != 200 or not body:
+        if status_code not in (200, 204, 401, 403) or not body:
             return None
 
         content_length = len(body)
         raw_preview = body[:200].decode("utf-8", errors="replace").strip()
+
+        # Handle 401/403 authenticated MCP endpoints
+        if status_code in (401, 403):
+            if artifact_type in ("mcp_server_card", "mcp_endpoint") and b"jsonrpc" in body:
+                return DiscoveredArtifact(
+                    artifact_type=artifact_type,
+                    url=url,
+                    status_code=status_code,
+                    latency_ms=latency_ms,
+                    content_length=content_length,
+                    valid_json=True,
+                    tools_count=0,
+                    server_name="Authenticated MCP Server",
+                    raw_preview=raw_preview,
+                )
+            return None
 
         # Case 1: llms.txt or markdown documentation
         if artifact_type in {"llms_txt", "llms_full_txt"}:
@@ -453,6 +498,13 @@ class ManifestAnalyzer:
             return None
 
         if not isinstance(payload, dict):
+            return None
+
+        # Check for CMS 404 disguised as JSON 200
+        if payload.get("method") in ("notfound", "error") or payload.get("error") is True:
+            return None
+        t_check = str(payload.get("server_title") or payload.get("name") or payload.get("title") or "").lower()
+        if "не найдена" in t_check or "page not found" in t_check or "404 not found" in t_check:
             return None
 
         tools_count = None
@@ -484,6 +536,10 @@ class ManifestAnalyzer:
             description = payload.get("description")
             if "tools" in payload and isinstance(payload["tools"], list):
                 tools_count = len(payload["tools"])
+            elif "result" in payload and isinstance(payload["result"], dict) and "tools" in payload["result"]:
+                tools = payload["result"]["tools"]
+                if isinstance(tools, list):
+                    tools_count = len(tools)
 
         return DiscoveredArtifact(
             artifact_type=artifact_type,
