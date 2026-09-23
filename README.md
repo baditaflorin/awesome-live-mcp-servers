@@ -10,9 +10,29 @@
 [![Enriched by DomainScope](https://img.shields.io/badge/Intelligence-DomainScope_Graph-00D26A?style=for-the-badge&logo=databricks)](https://domainscope.scrapetheworld.org)
 [![CI: Woodpecker](https://img.shields.io/badge/CI-Woodpecker_Self--Hosted-2088FF?style=for-the-badge&logo=linux)](https://ci.0exec.com)
 
-Unlike uncurated lists that classify servers merely by top-level domains (`.ai`, `.dev`, `.com`), this repository utilizes **[DomainScope's](https://domainscope.scrapetheworld.org) 13M+ firmographic graph** to classify servers by verified market vertical, business architecture, tool interface capacity, and real-world network latency.
+Unlike typical GitHub lists that catalog local code repositories requiring terminal installation (`npx`, `docker`, virtual environments), this repository is the **world's largest autonomous directory of live, running, publicly reachable Model Context Protocol (MCP) servers and streamable AI endpoints**.
 
 ---
+
+## ⚡ What Makes This Directory Different
+
+| Feature | Standard "Awesome MCP" Repositories | **Awesome Live MCP Servers 🌐⚡** |
+|---|---|---|
+| **What it lists** | GitHub source code repos for `localhost` execution | **Live, running, public HTTP endpoints** (`https://.../api/mcp`) |
+| **Setup required** | `npx`, Node.js, Python venvs, Docker, local configuration | **Zero-Install URL**: Directly connect in Cursor, Claude, or Windsurf |
+| **Maintenance** | Manual pull requests (frequently unmaintained or rotting) | **Autonomous & Self-Evolving**: Continuously crawled across 13M+ domains |
+| **Verification** | Unverified code links with unknown server health | **Live-Probed Telemetry**: Concurrently benchmarked reachability & response latencies |
+| **Firmographics** | Flat markdown files with arbitrary tags | **DomainScope Deep Intelligence**: Multi-dimensional market verticals & company dossiers |
+
+---
+
+## 🤖 Self-Evolving Autonomous Engine
+
+This directory is **not maintained by waiting for manual pull requests**. It is continuously discovered, updated, and verified by an autonomous internet-scale data pipeline:
+1. **1.2M+ Domains Probed**: Ingests high-priority cohorts (developer documentation platforms, open-source repositories, API surfaces, AI ecosystem domains) from DomainScope's 13M+ domain graph.
+2. **Standard & Streamable Detection**: Probes standard cards (`/.well-known/mcp/server-card.json`), streamable HTTP POST endpoints (`/api/mcp`), and AI catalogs (`/.well-known/ai-catalog.json`).
+3. **Live Health & Latency Telemetry**: Concurrently benchmarks round-trip latency (P50/P95) and verifies HTTP 200/204/401/403 states across 32 threads.
+4. **Firmographic Enrichment**: Enriches every host with DomainScope's verified business models, market taxonomy, and tech stack detection.
 
 ## 🧠 DomainScope Intelligence Integration
 

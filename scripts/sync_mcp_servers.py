@@ -33,7 +33,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DOMAINSCOPE_API = "https://domainscope.scrapetheworld.org/api/v1"
 DOMAINSCOPE_WEB = "https://domainscope.scrapetheworld.org"
-USER_AGENT = "Awesome-MCP-Servers-Bot/1.0 (+https://github.com/baditaflorin/awesome-mcp-servers)"
+USER_AGENT = "Awesome-Live-MCP-Servers-Bot/1.0 (+https://github.com/baditaflorin/awesome-live-mcp-servers)"
 
 def fetch_json(url, timeout=5):
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
@@ -311,6 +311,7 @@ def collect_discovered_domains():
     # 0. Load community & curated MCP servers (from GitHub issues, maintainers, submissions)
     community_files = [
         Path("data/community_mcp_servers.json"),
+        Path("../awesome-live-mcp-servers/data/community_mcp_servers.json"),
         Path("../awesome-mcp-servers/data/community_mcp_servers.json"),
     ]
     for cpath in community_files:
@@ -343,6 +344,7 @@ def collect_discovered_domains():
     # 0.5. Load existing catalog servers (never drop previously verified hosts)
     catalog_files = [
         Path("data/mcp-servers.json"),
+        Path("../awesome-live-mcp-servers/data/mcp-servers.json"),
         Path("../awesome-mcp-servers/data/mcp-servers.json"),
     ]
     for cat_path in catalog_files:
