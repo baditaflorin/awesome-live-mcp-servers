@@ -3,9 +3,10 @@ message: "If you use this directory, telemetry benchmarks, or datasets in your r
 title: "Awesome Live MCP Servers: The Autonomous Internet-Scale Registry of Remote Model Context Protocol Servers"
 abstract: "The world's largest autonomous directory of live, remote Model Context Protocol (MCP) servers on the internet. Continuously crawled, latency-benchmarked, and firmographically enriched by DomainScope."
 authors:
-  - family-names: "Badita-Nistor"
+  - family-names: "Badita"
     given-names: "Florin"
     email: "florin@badita.org"
+    affiliation: "DomainScope at Scrape the World"
 url: "https://github.com/baditaflorin/awesome-live-mcp-servers"
 repository-code: "https://github.com/baditaflorin/awesome-live-mcp-servers"
 date-released: "2026-09-23"

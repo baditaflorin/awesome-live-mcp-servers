@@ -2,7 +2,7 @@
 
 > **The definitive, live-benchmarked directory of public & remote Model Context Protocol (MCP) servers and streamable AI manifests on the internet.**
 >
-> Concurrently probed, latency-benchmarked, and enriched by **[DomainScope Deep Domain Intelligence](https://domainscope.scrapetheworld.org)**.
+> Concurrently probed, latency-benchmarked, and enriched by **[DomainScope at Scrape the World](https://domainscope.scrapetheworld.org)**.
 
 [![Total Servers](https://img.shields.io/badge/MCP_Servers-2467-purple?style=for-the-badge&logo=anthropic)](data/mcp-servers.json)
 [![Live Reachable](https://img.shields.io/badge/Live_Reachable-2412%20Online-emerald?style=for-the-badge)](data/mcp-servers.json)
@@ -22,7 +22,7 @@ Unlike typical GitHub lists that catalog local code repositories requiring termi
 | **Setup required** | `npx`, Node.js, Python venvs, Docker, local configuration | **Zero-Install URL**: Directly connect in Cursor, Claude, or Windsurf |
 | **Maintenance** | Manual pull requests (frequently unmaintained or rotting) | **Autonomous & Self-Evolving**: Continuously crawled across 13M+ domains |
 | **Verification** | Unverified code links with unknown server health | **Live-Probed Telemetry**: Concurrently benchmarked reachability & response latencies |
-| **Firmographics** | Flat markdown files with arbitrary tags | **DomainScope Deep Intelligence**: Multi-dimensional market verticals & company dossiers |
+| **Firmographics** | Flat markdown files with arbitrary tags | **DomainScope at Scrape the World**: Multi-dimensional market verticals & company dossiers |
 
 ---
 
@@ -3392,13 +3392,14 @@ Host your MCP server card at `https://yourdomain.com/.well-known/mcp/server-card
 If you use this dataset, telemetry benchmarks, or directory in academic research, articles, industry analyses, or publications, please cite it as follows:
 
 ### Markdown / Plain Text
-> Badita-Nistor, F. (2026). *Awesome Live MCP Servers: The Autonomous Internet-Scale Registry of Remote Model Context Protocol Servers*. DomainScope Research. https://github.com/baditaflorin/awesome-live-mcp-servers
+> Badita, F. (2026). *Awesome Live MCP Servers: The Autonomous Internet-Scale Registry of Remote Model Context Protocol Servers*. DomainScope at Scrape the World. https://github.com/baditaflorin/awesome-live-mcp-servers
 
 ### BibTeX
 ```bibtex
 @misc{badita2026awesomelivemcpservers,
-  author = {Badita-Nistor, Florin},
+  author = {Badita, Florin},
   title = {Awesome Live MCP Servers: The Autonomous Internet-Scale Registry of Remote Model Context Protocol Servers},
+  institution = {DomainScope at Scrape the World},
   year = {2026},
   publisher = {GitHub},
   journal = {GitHub repository},
@@ -3412,9 +3413,9 @@ If you use this dataset, telemetry benchmarks, or directory in academic research
 ## 📬 Contact, Press & Research Inquiries
 
 For media interviews, research collaborations, custom dataset slices, or partnership inquiries:
-- **Author / Maintainer**: Florin Badita-Nistor
+- **Author / Maintainer**: Florin Badita
 - **Email**: [`florin@badita.org`](mailto:florin@badita.org)
-- **Platform**: [DomainScope](https://domainscope.scrapetheworld.org)
+- **Initiative**: [DomainScope at Scrape the World](https://domainscope.scrapetheworld.org)
 - **License**: [MIT License](LICENSE)
 
-**Maintained by [DomainScope](https://domainscope.scrapetheworld.org) & Florin Badita-Nistor** · *Licensed under MIT*.
+**Maintained by Florin Badita & [DomainScope at Scrape the World](https://domainscope.scrapetheworld.org)** · *Licensed under MIT*.
