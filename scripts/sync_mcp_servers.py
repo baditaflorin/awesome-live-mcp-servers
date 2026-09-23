@@ -669,20 +669,119 @@ def write_readme(servers, total_scanned, total_catalogs, active_count):
         ""
     ]
 
-    for cat_name in sorted(categories.keys()):
-        cat_servers = categories[cat_name]
-        lines.append(f"### {cat_name} ({len(cat_servers)})")
-        lines.append("")
-        lines.append("| Server / Host | Business Model | Status | Latency | Tools | Manifest | DomainScope Dossier |")
-        lines.append("|---|---|:---:|:---:|:---:|:---:|:---:|")
+    # Define vertical category metadata and directory pages
+    category_meta = {
+        "🛠️ Developer Platforms, DevOps & Web3": {
+            "slug": "developer-platforms.md",
+            "desc": "Developer tooling, APIs, CI/CD, cloud orchestration, web3, and IDE integrations."
+        },
+        "💼 Enterprise SaaS & B2B Solutions": {
+            "slug": "enterprise-saas.md",
+            "desc": "Enterprise cloud services, workflow software, corporate knowledge, and B2B platforms."
+        },
+        "🤖 Autonomous Agents & Workflow Automation": {
+            "slug": "autonomous-agents.md",
+            "desc": "AI agent swarms, automated assistants, reasoning runtimes, and autonomous pipelines."
+        },
+        "🛒 E-Commerce & Commercial Services": {
+            "slug": "ecommerce.md",
+            "desc": "Online storefronts, retail catalogs, merchant operations, and commerce tools."
+        },
+        "📊 Enterprise Intelligence & Analytics": {
+            "slug": "analytics.md",
+            "desc": "Data pipelines, market intelligence, telemetry monitoring, BI, and metrics."
+        },
+        "🌐 Web Search, Crawling & Data Extraction": {
+            "slug": "web-search-crawling.md",
+            "desc": "Web scrapers, search indices, document parsing, content extraction, and search tools."
+        },
+        "🔒 Cybersecurity & Infrastructure": {
+            "slug": "cybersecurity.md",
+            "desc": "Auth, threat detection, secret management, identity verification, TLS, and audit."
+        },
+        "🧠 AI Foundations & Model Inference": {
+            "slug": "ai-foundations.md",
+            "desc": "Model serving endpoints, foundation labs, LLM hosting providers, and inference runtimes."
+        },
+    }
+
+    dir_path = Path("directory")
+    dir_path.mkdir(exist_ok=True)
+
+    # 1. Write dedicated markdown files for each vertical category
+    for cat_name, cat_servers in categories.items():
+        meta = category_meta.get(cat_name, {"slug": "other.md", "desc": "Specialized services and tools."})
+        cat_file = dir_path / meta["slug"]
+        cat_live = sum(1 for s in cat_servers if s["reachable"])
+
+        cat_lines = [
+            f"# {cat_name}",
+            "",
+            f"> {meta['desc']}",
+            ">",
+            f"> **{len(cat_servers)} Servers** ({cat_live} Live & Reachable Online) • Part of the **[Awesome Live MCP Servers](https://github.com/baditaflorin/awesome-live-mcp-servers)** registry.",
+            f"> Enriched with live telemetry by **[DomainScope at Scrape the World](https://domainscope.scrapetheworld.org)**.",
+            "",
+            "[← Back to Main Repository](../README.md)",
+            "",
+            "---",
+            "",
+            "| Server / Host | Business Model | Status | Latency | Tools | Manifest | DomainScope Dossier |",
+            "|---|---|:---:|:---:|:---:|:---:|:---:|",
+        ]
         for s in cat_servers:
             status_badge = "🟢 **Live**" if s["reachable"] else "🔴 *Down*"
             lat_str = f"{s['latency_ms']} ms" if s["latency_ms"] > 0 else "-"
             tools_str = str(s["tools_count"]) if s["tools_count"] > 0 else "✓"
             bm_badge = f"`{s['business_model']}`" if s.get("business_model") else "`B2B SaaS`"
             repo_link = f" • [Repo ↗]({s['repo_url']})" if s.get("repo_url") else ""
-            lines.append(f"| **[{s['domain']}](https://{s['domain']})**<br>*{s['title']}*{repo_link} | {bm_badge} | {status_badge} | {lat_str} | {tools_str} | [Manifest ↗]({s['card_url']}) | [Dossier ↗]({s['dossier_url']}) |")
-        lines.append("")
+            cat_lines.append(f"| **[{s['domain']}](https://{s['domain']})**<br>*{s['title']}*{repo_link} | {bm_badge} | {status_badge} | {lat_str} | {tools_str} | [Manifest ↗]({s['card_url']}) | [Dossier ↗]({s['dossier_url']}) |")
+
+        cat_lines.extend([
+            "",
+            "---",
+            "",
+            "[← Back to Main Repository](../README.md) • [Download Machine JSON](../data/mcp-servers.json) • [Download CSV](../data/mcp-servers.csv)",
+        ])
+        cat_file.write_text("\n".join(cat_lines) + "\n", encoding="utf-8")
+
+    # 2. Build Category Index Table in README.md
+    lines.append("| Vertical Category | Live Online | Total Servers | Scope | Full Directory |")
+    lines.append("|---|:---:|:---:|---|:---:|")
+    for cat_name in sorted(categories.keys(), key=lambda k: len(categories[k]), reverse=True):
+        cat_servers = categories[cat_name]
+        meta = category_meta.get(cat_name, {"slug": "other.md", "desc": "Specialized services."})
+        cat_live = sum(1 for s in cat_servers if s["reachable"])
+        lines.append(f"| **{cat_name}** | 🟢 **{cat_live}** | **{len(cat_servers)}** | {meta['desc']} | [**Browse All ({len(cat_servers)}) ↗**](directory/{meta['slug']}) |")
+    lines.append("")
+
+    # 3. Add Featured Multi-Tool & High-Capacity Servers Table in README.md
+    featured_servers = [s for s in servers if s.get("tools_count", 0) > 0 or s.get("source") == "community"]
+    # Sort by declared tools (descending), then latency (ascending)
+    featured_servers.sort(key=lambda s: (-s.get("tools_count", 0), s.get("latency_ms", 9999)))
+    # Limit to top 100 for fast, clean rendering under 150 KB
+    featured_slice = featured_servers[:100]
+
+    lines.extend([
+        "---",
+        "",
+        f"## 🌟 Featured Multi-Tool & High-Capacity Servers ({len(featured_slice)} Highlighted)",
+        "",
+        "> Live remote servers offering verified multi-tool suites (`tools_count > 0`) or community-submitted Streamable HTTP endpoints.",
+        ">",
+        "> 💡 **Explore the complete registry**: Click into any vertical category table above, or query the full datasets in [`data/mcp-servers.json`](data/mcp-servers.json) and [`data/mcp-servers.csv`](data/mcp-servers.csv).",
+        "",
+        "| Server / Host | Category | Business Model | Status | Latency | Tools | Manifest | DomainScope Dossier |",
+        "|---|---|---|:---:|:---:|:---:|:---:|:---:|",
+    ])
+    for s in featured_slice:
+        status_badge = "🟢 **Live**" if s["reachable"] else "🔴 *Down*"
+        lat_str = f"{s['latency_ms']} ms" if s["latency_ms"] > 0 else "-"
+        tools_str = f"**{s['tools_count']} tools**" if s["tools_count"] > 0 else "✓"
+        bm_badge = f"`{s['business_model']}`" if s.get("business_model") else "`B2B SaaS`"
+        repo_link = f" • [Repo ↗]({s['repo_url']})" if s.get("repo_url") else ""
+        lines.append(f"| **[{s['domain']}](https://{s['domain']})**<br>*{s['title']}*{repo_link} | {s['category']} | {bm_badge} | {status_badge} | {lat_str} | {tools_str} | [Manifest ↗]({s['card_url']}) | [Dossier ↗]({s['dossier_url']}) |")
+    lines.append("")
 
     # Add Cross-Section by Business Model
     lines.extend([
