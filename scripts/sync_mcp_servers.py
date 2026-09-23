@@ -340,6 +340,66 @@ def collect_discovered_domains():
             except Exception as exc:
                 print(f"  [-] Error reading {cpath}: {exc}")
 
+    # 0.5. Load existing catalog servers (never drop previously verified hosts)
+    catalog_files = [
+        Path("data/mcp-servers.json"),
+        Path("../awesome-mcp-servers/data/mcp-servers.json"),
+    ]
+    for cat_path in catalog_files:
+        if cat_path.exists():
+            try:
+                with open(cat_path, "r", encoding="utf-8") as f:
+                    cdata = json.load(f)
+                servers = cdata.get("servers", []) if isinstance(cdata, dict) else cdata
+                for s in servers:
+                    d = s.get("domain")
+                    if d and d not in domain_map:
+                        domain_map[d] = {
+                            "domain": d,
+                            "title": s.get("title"),
+                            "description": s.get("description"),
+                            "card_url": s.get("card_url"),
+                            "repo_url": s.get("repo_url"),
+                            "docs_url": s.get("docs_url"),
+                            "registry": s.get("registry"),
+                            "package": s.get("package"),
+                            "category": s.get("category"),
+                            "tools_count": s.get("tools_count", 0),
+                            "transport": s.get("transport", ""),
+                            "server_count": s.get("server_count", 1),
+                            "artifact_count": s.get("artifact_count", 1),
+                            "source": s.get("source", "catalog-history"),
+                        }
+            except Exception as exc:
+                print(f"  [-] Error reading {cat_path}: {exc}")
+
+    # Fallback to git history for previous release baseline if needed
+    try:
+        import subprocess
+        raw_old = subprocess.check_output(["git", "show", "bb90800:data/mcp-servers.json"], stderr=subprocess.DEVNULL)
+        old_data = json.loads(raw_old.decode("utf-8"))
+        for s in old_data.get("servers", []):
+            d = s.get("domain")
+            if d and d not in domain_map:
+                domain_map[d] = {
+                    "domain": d,
+                    "title": s.get("title"),
+                    "description": s.get("description"),
+                    "card_url": s.get("card_url"),
+                    "repo_url": s.get("repo_url"),
+                    "docs_url": s.get("docs_url"),
+                    "registry": s.get("registry"),
+                    "package": s.get("package"),
+                    "category": s.get("category"),
+                    "tools_count": s.get("tools_count", 0),
+                    "transport": s.get("transport", ""),
+                    "server_count": s.get("server_count", 1),
+                    "artifact_count": s.get("artifact_count", 1),
+                    "source": s.get("source", "catalog-history"),
+                }
+    except Exception:
+        pass
+
     # 1. Query live DomainScope AI Ecosystem endpoint
     print("🚀 Querying DomainScope AI Ecosystem API...")
     res = fetch_json(f"{DOMAINSCOPE_API}/stats/ai-ecosystem")
