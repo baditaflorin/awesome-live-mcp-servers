@@ -493,15 +493,15 @@ def write_readme(servers, total_scanned, total_catalogs, active_count):
         biz_models.setdefault(bm, []).append(s)
 
     lines = [
-        "# Awesome MCP Servers 🌐⚡",
+        "# Awesome Live MCP Servers 🌐⚡",
         "",
-        "> **The definitive, live-benchmarked directory of public Model Context Protocol (MCP) servers and streamable AI manifests on the internet.**",
+        "> **The definitive, live-benchmarked directory of public & remote Model Context Protocol (MCP) servers and streamable AI manifests on the internet.**",
         ">",
-        "> Powered & enriched by **[DomainScope Deep Domain Intelligence](https://domainscope.scrapetheworld.org)**.",
+        "> Concurrently probed, latency-benchmarked, and enriched by **[DomainScope Deep Domain Intelligence](https://domainscope.scrapetheworld.org)**.",
         "",
         f"[![Total Servers](https://img.shields.io/badge/MCP_Servers-{len(servers)}-purple?style=for-the-badge&logo=anthropic)](data/mcp-servers.json)",
         f"[![Live Reachable](https://img.shields.io/badge/Live_Reachable-{active_count}%20Online-emerald?style=for-the-badge)](data/mcp-servers.json)",
-        f"[![Scanned Corpus](https://img.shields.io/badge/Scanned_Corpus-450k+_Domains-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)",
+        f"[![Scanned Corpus](https://img.shields.io/badge/Scanned_Corpus-800k+_Domains-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)",
         f"[![Enriched by DomainScope](https://img.shields.io/badge/Intelligence-DomainScope_Graph-00D26A?style=for-the-badge&logo=databricks)](https://domainscope.scrapetheworld.org)",
         f"[![CI: Woodpecker](https://img.shields.io/badge/CI-Woodpecker_Self--Hosted-2088FF?style=for-the-badge&logo=linux)](https://ci.0exec.com)",
         "",
