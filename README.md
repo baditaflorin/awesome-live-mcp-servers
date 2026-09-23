@@ -3385,4 +3385,36 @@ This repository is continuously synchronized on our self-hosted bare-metal infra
 
 Host your MCP server card at `https://yourdomain.com/.well-known/mcp/server-card.json` or `/.well-known/ai-catalog.json`. DomainScope's crawler will discover it automatically, or submit an issue / PR!
 
-**Maintained by [DomainScope](https://domainscope.scrapetheworld.org) & Badita Florin** · *Licensed under MIT*.
+---
+
+## 📚 Citation, Research & Press Attribution
+
+If you use this dataset, telemetry benchmarks, or directory in academic research, articles, industry analyses, or publications, please cite it as follows:
+
+### Markdown / Plain Text
+> Badita-Nistor, F. (2026). *Awesome Live MCP Servers: The Autonomous Internet-Scale Registry of Remote Model Context Protocol Servers*. DomainScope Research. https://github.com/baditaflorin/awesome-live-mcp-servers
+
+### BibTeX
+```bibtex
+@misc{badita2026awesomelivemcpservers,
+  author = {Badita-Nistor, Florin},
+  title = {Awesome Live MCP Servers: The Autonomous Internet-Scale Registry of Remote Model Context Protocol Servers},
+  year = {2026},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  howpublished = {\url{https://github.com/baditaflorin/awesome-live-mcp-servers}},
+  url = {https://github.com/baditaflorin/awesome-live-mcp-servers}
+}
+```
+
+---
+
+## 📬 Contact, Press & Research Inquiries
+
+For media interviews, research collaborations, custom dataset slices, or partnership inquiries:
+- **Author / Maintainer**: Florin Badita-Nistor
+- **Email**: [`florin@badita.org`](mailto:florin@badita.org)
+- **Platform**: [DomainScope](https://domainscope.scrapetheworld.org)
+- **License**: [MIT License](LICENSE)
+
+**Maintained by [DomainScope](https://domainscope.scrapetheworld.org) & Florin Badita-Nistor** · *Licensed under MIT*.
