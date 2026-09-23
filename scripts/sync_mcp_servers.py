@@ -275,6 +275,35 @@ def categorize_server(domain, d_info, title, desc):
         return "🔒 Cybersecurity & Infrastructure"
     return "💼 Enterprise SaaS & B2B Solutions"
 
+def get_total_scanned_corpus_str() -> str:
+    """Computes total domains scanned across all discoverable batch summaries."""
+    search_dirs = [
+        Path("../go-url-categorizer-api/batches"),
+        Path("batches"),
+        Path("../batches"),
+        Path("data/mcp_batches"),
+    ]
+    seen_summaries = set()
+    total_scanned = 0
+    for bdir in search_dirs:
+        if bdir.exists():
+            for spath in bdir.glob("*/crawl_summary.json"):
+                resolved = spath.resolve()
+                if resolved in seen_summaries:
+                    continue
+                seen_summaries.add(resolved)
+                try:
+                    with open(resolved, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    total_scanned += data.get("total_domains_scanned", 0)
+                except Exception:
+                    pass
+    if total_scanned >= 1_000_000:
+        return f"{total_scanned / 1_000_000:.1f}M+_Domains"
+    if total_scanned > 0:
+        return f"{total_scanned // 1_000}k+_Domains"
+    return "1M+_Domains"
+
 def collect_discovered_domains():
     """Aggregates prospective MCP hosts from community submissions, DomainScope API, and all crawler batches."""
     domain_map = {}
@@ -501,7 +530,7 @@ def write_readme(servers, total_scanned, total_catalogs, active_count):
         "",
         f"[![Total Servers](https://img.shields.io/badge/MCP_Servers-{len(servers)}-purple?style=for-the-badge&logo=anthropic)](data/mcp-servers.json)",
         f"[![Live Reachable](https://img.shields.io/badge/Live_Reachable-{active_count}%20Online-emerald?style=for-the-badge)](data/mcp-servers.json)",
-        f"[![Scanned Corpus](https://img.shields.io/badge/Scanned_Corpus-1M+_Domains-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)",
+        f"[![Scanned Corpus](https://img.shields.io/badge/Scanned_Corpus-{get_total_scanned_corpus_str()}-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)",
         f"[![Enriched by DomainScope](https://img.shields.io/badge/Intelligence-DomainScope_Graph-00D26A?style=for-the-badge&logo=databricks)](https://domainscope.scrapetheworld.org)",
         f"[![CI: Woodpecker](https://img.shields.io/badge/CI-Woodpecker_Self--Hosted-2088FF?style=for-the-badge&logo=linux)](https://ci.0exec.com)",
         "",
