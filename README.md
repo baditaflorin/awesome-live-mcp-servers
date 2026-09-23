@@ -6,7 +6,7 @@
 
 [![Total Servers](https://img.shields.io/badge/MCP_Servers-2080-purple?style=for-the-badge&logo=anthropic)](data/mcp-servers.json)
 [![Live Reachable](https://img.shields.io/badge/Live_Reachable-2040%20Online-emerald?style=for-the-badge)](data/mcp-servers.json)
-[![Scanned Corpus](https://img.shields.io/badge/Scanned_Corpus-800k+_Domains-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)
+[![Scanned Corpus](https://img.shields.io/badge/Scanned_Corpus-1M+_Domains-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)
 [![Enriched by DomainScope](https://img.shields.io/badge/Intelligence-DomainScope_Graph-00D26A?style=for-the-badge&logo=databricks)](https://domainscope.scrapetheworld.org)
 [![CI: Woodpecker](https://img.shields.io/badge/CI-Woodpecker_Self--Hosted-2088FF?style=for-the-badge&logo=linux)](https://ci.0exec.com)
 

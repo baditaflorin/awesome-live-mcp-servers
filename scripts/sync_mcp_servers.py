@@ -501,7 +501,7 @@ def write_readme(servers, total_scanned, total_catalogs, active_count):
         "",
         f"[![Total Servers](https://img.shields.io/badge/MCP_Servers-{len(servers)}-purple?style=for-the-badge&logo=anthropic)](data/mcp-servers.json)",
         f"[![Live Reachable](https://img.shields.io/badge/Live_Reachable-{active_count}%20Online-emerald?style=for-the-badge)](data/mcp-servers.json)",
-        f"[![Scanned Corpus](https://img.shields.io/badge/Scanned_Corpus-800k+_Domains-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)",
+        f"[![Scanned Corpus](https://img.shields.io/badge/Scanned_Corpus-1M+_Domains-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)",
         f"[![Enriched by DomainScope](https://img.shields.io/badge/Intelligence-DomainScope_Graph-00D26A?style=for-the-badge&logo=databricks)](https://domainscope.scrapetheworld.org)",
         f"[![CI: Woodpecker](https://img.shields.io/badge/CI-Woodpecker_Self--Hosted-2088FF?style=for-the-badge&logo=linux)](https://ci.0exec.com)",
         "",
