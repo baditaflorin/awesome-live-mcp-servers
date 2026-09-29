@@ -757,7 +757,11 @@ class CrawlerOrchestrator:
         writer: BatchWriter,
         concurrency: int = DEFAULT_CONCURRENCY,
         timeout: float = DEFAULT_TIMEOUT,
+        db_importer=None,
     ):
+        self.db_importer = db_importer
+        self._db_buffer: List[str] = []
+        self._db_written = 0
         self.domains = domains
         self.writer = writer
         self.concurrency = concurrency
@@ -766,6 +770,19 @@ class CrawlerOrchestrator:
 
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
+
+    def _flush_db(self, force: bool = False) -> None:
+        if not self.db_importer or not self._db_buffer or (not force and len(self._db_buffer) < 100):
+            return
+        batch, self._db_buffer = self._db_buffer, []
+        try:
+            written, checked = self.db_importer.import_domains(batch)
+            self._db_written += written
+            print(f"\n  [db] validated {written}/{checked} discovered domains -> Postgres (total written {self._db_written})")
+        except Exception as exc:
+            # keep the domains so the next flush retries them; never lose discoveries
+            self._db_buffer = batch + self._db_buffer
+            print(f"\n  [db] write failed, will retry: {exc}", file=sys.stderr)
 
     def _handle_signal(self, signum, frame):
         print(f"\n[!] Signal {signum} received. Finishing current workers and saving checkpoint...")
@@ -810,6 +827,8 @@ class CrawlerOrchestrator:
                     if result.has_ai_presence:
                         discovered_results.append(result)
                         self.writer.record_discovered(result)
+                        self._db_buffer.append(domain)
+                        self._flush_db()
                         arts = [a.artifact_type for a in result.artifacts]
                         print(f"  [+] Discovered: {domain} -> {arts} (lat: {result.min_latency_ms}ms, tools: {result.total_tools_declared})")
 
@@ -823,6 +842,7 @@ class CrawlerOrchestrator:
                     completed_set.add(domain)
 
         elapsed = time.time() - start_time
+        self._flush_db(force=True)
         self.writer.save_checkpoint(completed_set, len(self.domains))
         self.writer.finalize_batches(discovered_results, processed_in_run, elapsed)
 
@@ -854,6 +874,11 @@ def parse_args() -> argparse.Namespace:
     db_group.add_argument(
         "--db",
         help="Database connection DSN or path (e.g. postgres://... or sqlite:///path/to/db.sqlite or /path/to/db.db).",
+    )
+    db_group.add_argument(
+        "--no-write-db",
+        action="store_true",
+        help="Do NOT write validated discoveries back to Postgres (default: write when a Postgres DSN is known).",
     )
     db_group.add_argument(
         "--db-query",
@@ -982,6 +1007,17 @@ def load_domains(args: argparse.Namespace) -> List[str]:
     return cleaned
 
 
+def resolve_write_dsn(args) -> Optional[str]:
+    """Postgres DSN to write discoveries to, or None. Default: write whenever a Postgres DSN is known."""
+    if getattr(args, "no_write_db", False):
+        return None
+    dsn = args.db if args.db and args.db.lower().startswith(("postgres://", "postgresql://")) else None
+    if not dsn:
+        env = load_env_file()
+        dsn = os.environ.get("POSTGRES_DSN") or os.environ.get("DATABASE_URL") or env.get("POSTGRES_DSN")
+    return dsn
+
+
 def main() -> int:
     args = parse_args()
     domains = load_domains(args)
@@ -993,11 +1029,20 @@ def main() -> int:
         return 1
 
     writer = BatchWriter(output_dir=Path(args.output_dir))
+    db_importer = None
+    write_dsn = resolve_write_dsn(args)
+    if write_dsn:
+        from db_importer import DatabaseImporter
+        db_importer = DatabaseImporter(write_dsn)
+        print("[*] Discoveries are validated and written back to Postgres (disable with --no-write-db).")
+    else:
+        print("[!] No Postgres DSN: discoveries go to files ONLY and will not be in DomainScope.", file=sys.stderr)
     orchestrator = CrawlerOrchestrator(
         domains=domains,
         writer=writer,
         concurrency=args.concurrency,
         timeout=args.timeout,
+        db_importer=db_importer,
     )
     orchestrator.run()
     return 0

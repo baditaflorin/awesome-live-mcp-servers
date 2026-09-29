@@ -275,275 +275,118 @@ def categorize_server(domain, d_info, title, desc):
         return "🔒 Cybersecurity & Infrastructure"
     return "💼 Enterprise SaaS & B2B Solutions"
 
-def get_total_scanned_corpus_str() -> str:
-    """Computes total domains scanned across all discoverable batch summaries."""
-    search_dirs = [
-        Path("../go-url-categorizer-api/batches"),
-        Path("batches"),
-        Path("../batches"),
-        Path("data/mcp_batches"),
-    ]
-    seen_summaries = set()
-    total_scanned = 0
-    for bdir in search_dirs:
-        if bdir.exists():
-            for spath in bdir.glob("*/crawl_summary.json"):
-                resolved = spath.resolve()
-                if resolved in seen_summaries:
-                    continue
-                seen_summaries.add(resolved)
-                try:
-                    with open(resolved, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    total_scanned += data.get("total_domains_scanned", 0)
-                except Exception:
-                    pass
-    HISTORICAL_SCANNED_BASELINE = 1_204_296  # Batches 1 through 11
-    if total_scanned < HISTORICAL_SCANNED_BASELINE:
-        total_scanned += HISTORICAL_SCANNED_BASELINE
+def format_scanned(n):
+    """Human string for the number of domains the AI-catalog scanner has actually checked."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n // 1_000}k"
+    return str(n)
 
-    if total_scanned >= 1_000_000:
-        return f"{total_scanned / 1_000_000:.1f}M+_Domains"
-    if total_scanned > 0:
-        return f"{total_scanned // 1_000}k+_Domains"
-    return "1.4M+_Domains"
+DB_ROWS_SQL = """
+SELECT row_to_json(t) FROM (
+  SELECT d.name AS domain,
+         (array_agg(s.server_name ORDER BY s.id))[1] AS title,
+         (array_agg(COALESCE(s.server_description, '') ORDER BY s.id))[1] AS description,
+         (array_agg(COALESCE(s.server_version, '') ORDER BY s.id))[1] AS version,
+         (array_agg(s.server_card_url ORDER BY s.id))[1] AS card_url,
+         COUNT(*) AS server_count,
+         bool_or(s.mcp_endpoint_reachable) AS handshake_ok,
+         bool_and(s.mcp_endpoint_reachable IS NOT DISTINCT FROM false) AS all_failed
+    FROM domain_mcp_servers s JOIN domains d ON d.id = s.domain_id
+   GROUP BY d.name ORDER BY d.name
+) t;
+"""
 
-def collect_discovered_domains():
-    """Aggregates prospective MCP hosts from community submissions, DomainScope API, and all crawler batches."""
-    domain_map = {}
+DB_STATS_SQL = """
+SELECT row_to_json(t) FROM (
+  SELECT (SELECT COUNT(*) FROM domain_ai_catalog) AS scanned,
+         (SELECT COUNT(*) FROM domain_ai_catalog
+           WHERE has_ai_catalog AND (COALESCE(ai_artifact_count,0) > 0 OR COALESCE(mcp_server_count,0) > 0
+                 OR COALESCE(a2a_agent_count,0) > 0 OR COALESCE(nested_catalog_count,0) > 0)) AS catalogs
+) t;
+"""
 
-    # 0. Load community & curated MCP servers (from GitHub issues, maintainers, submissions)
-    community_files = [
-        Path("data/community_mcp_servers.json"),
-        Path("../awesome-live-mcp-servers/data/community_mcp_servers.json"),
-        Path("../awesome-mcp-servers/data/community_mcp_servers.json"),
-    ]
-    for cpath in community_files:
-        if cpath.exists():
-            try:
-                with open(cpath, "r", encoding="utf-8") as f:
-                    cdata = json.load(f)
-                for item in cdata:
-                    d = item.get("domain")
-                    if d:
-                        domain_map[d] = {
-                            "domain": d,
-                            "title": item.get("title"),
-                            "description": item.get("description"),
-                            "card_url": item.get("card_url"),
-                            "repo_url": item.get("repo_url"),
-                            "docs_url": item.get("docs_url"),
-                            "registry": item.get("registry"),
-                            "package": item.get("package"),
-                            "category": item.get("category"),
-                            "tools_count": item.get("tools_count", 1),
-                            "transport": item.get("transport"),
-                            "server_count": 1,
-                            "artifact_count": 1,
-                            "source": item.get("source", "community"),
-                        }
-            except Exception as exc:
-                print(f"  [-] Error reading {cpath}: {exc}")
 
-    # 0.5. Load existing catalog servers (never drop previously verified hosts)
-    catalog_files = [
-        Path("data/mcp-servers.json"),
-        Path("../awesome-live-mcp-servers/data/mcp-servers.json"),
-        Path("../awesome-mcp-servers/data/mcp-servers.json"),
-    ]
-    for cat_path in catalog_files:
-        if cat_path.exists():
-            try:
-                with open(cat_path, "r", encoding="utf-8") as f:
-                    cdata = json.load(f)
-                servers = cdata.get("servers", []) if isinstance(cdata, dict) else cdata
-                for s in servers:
-                    d = s.get("domain")
-                    if d and d not in domain_map:
-                        domain_map[d] = {
-                            "domain": d,
-                            "title": s.get("title"),
-                            "description": s.get("description"),
-                            "card_url": s.get("card_url"),
-                            "repo_url": s.get("repo_url"),
-                            "docs_url": s.get("docs_url"),
-                            "registry": s.get("registry"),
-                            "package": s.get("package"),
-                            "category": s.get("category"),
-                            "tools_count": s.get("tools_count", 0),
-                            "transport": s.get("transport", ""),
-                            "server_count": s.get("server_count", 1),
-                            "artifact_count": s.get("artifact_count", 1),
-                            "source": s.get("source", "catalog-history"),
-                        }
-            except Exception as exc:
-                print(f"  [-] Error reading {cat_path}: {exc}")
+def psql_json_lines(sql):
+    dsn = get_postgres_dsn()
+    psql_path = shutil.which("psql")
+    if not dsn or not psql_path:
+        raise SystemExit("DomainScope is the source of truth: set POSTGRES_DSN and install psql "
+                         "(or pass --rows-json exported from the database). Refusing to invent data.")
+    env = os.environ.copy()
+    env["PGCONNECT_TIMEOUT"] = "10"
+    out = subprocess.check_output([psql_path, dsn, "-t", "-A", "-c", sql], text=True, env=env)
+    return [json.loads(l) for l in out.splitlines() if l.strip()]
 
-    # Fallback to git history for previous release baseline if needed
-    try:
-        import subprocess
-        raw_old = subprocess.check_output(["git", "show", "bb90800:data/mcp-servers.json"], stderr=subprocess.DEVNULL)
-        old_data = json.loads(raw_old.decode("utf-8"))
-        for s in old_data.get("servers", []):
-            d = s.get("domain")
-            if d and d not in domain_map:
-                domain_map[d] = {
-                    "domain": d,
-                    "title": s.get("title"),
-                    "description": s.get("description"),
-                    "card_url": s.get("card_url"),
-                    "repo_url": s.get("repo_url"),
-                    "docs_url": s.get("docs_url"),
-                    "registry": s.get("registry"),
-                    "package": s.get("package"),
-                    "category": s.get("category"),
-                    "tools_count": s.get("tools_count", 0),
-                    "transport": s.get("transport", ""),
-                    "server_count": s.get("server_count", 1),
-                    "artifact_count": s.get("artifact_count", 1),
-                    "source": s.get("source", "catalog-history"),
-                }
-    except Exception:
-        pass
 
-    # 1. Query live DomainScope AI Ecosystem endpoint
-    print("🚀 Querying DomainScope AI Ecosystem API...")
-    res = fetch_json(f"{DOMAINSCOPE_API}/stats/ai-ecosystem")
-    if res and "data" in res:
-        data = res["data"]
-        for item in data.get("top_mcp_domains", []):
-            d = item.get("domain")
-            if d and d not in domain_map:
-                domain_map[d] = {
-                    "domain": d,
-                    "server_count": item.get("server_count", 1),
-                    "artifact_count": item.get("artifact_count", 1),
-                    "source": "domainscope-api",
-                }
+def load_from_database(rows_json=None):
+    """All servers + corpus stats come from Postgres (domain_mcp_servers), never from crawler files."""
+    if rows_json:
+        blob = json.load(open(rows_json))
+        return blob["rows"], blob["stats"], blob.get("intel")
+    rows = psql_json_lines(DB_ROWS_SQL)
+    stats = psql_json_lines(DB_STATS_SQL)[0]
+    return rows, stats, None
 
-    # 2. Query batch files from local directories
-    search_dirs = [
-        Path("../go-url-categorizer-api/batches"),
-        Path("batches"),
-        Path("../batches"),
-        Path("data/mcp_batches"),
-    ]
 
-    for bdir in search_dirs:
-        if bdir.exists():
-            for jpath in bdir.glob("*/domainscope_indexing_batch.json"):
-                try:
-                    with open(jpath, "r", encoding="utf-8") as f:
-                        bdata = json.load(f)
-                    for item in bdata.get("domains", []):
-                        d = item.get("domain")
-                        if not d:
-                            continue
-                        if item.get("has_mcp") or item.get("has_ai_catalog"):
-                            if d not in domain_map:
-                                domain_map[d] = {
-                                    "domain": d,
-                                    "server_count": item.get("tools_count", 1),
-                                    "artifact_count": len(item.get("artifacts", [])),
-                                    "source": "crawler-batch",
-                                }
-                except Exception as exc:
-                    print(f"  [-] Error reading {jpath}: {exc}")
+def build_server_entry(row, intel):
+    """Directory entry from a database row. 'reachable' means a live MCP initialize handshake succeeded."""
+    domain = row["domain"]
+    d_info = intel.get(domain) or {}
+    title = row.get("title") or domain
+    desc = row.get("description") or d_info.get("summary") or f"{d_info.get('category', 'Technology')} platform & services."
+    if row.get("handshake_ok"):
+        verification = "handshake_ok"
+    elif row.get("all_failed"):
+        verification = "unreachable"
+    else:
+        verification = "protected_or_unverified"
+    return {
+        "domain": domain,
+        "title": title,
+        "description": desc[:300],
+        "category": categorize_server(domain, d_info, title, desc),
+        "domainscope_category": d_info.get("category", "Technology"),
+        "industry": d_info.get("industry", "Technology"),
+        "business_model": d_info.get("business_model", "B2B SaaS"),
+        "country": d_info.get("country", "Global"),
+        "city": d_info.get("city", ""),
+        "reachable": bool(row.get("handshake_ok")),
+        "verification": verification,
+        "latency_ms": 0,
+        "tools_count": 0,
+        "version": row.get("version") or "",
+        "card_url": row.get("card_url") or "",
+        "repo_url": "", "docs_url": "", "registry": "", "package": "", "transport": "",
+        "server_count": row.get("server_count", 1),
+        "artifact_count": 0,
+        "dossier_url": f"{DOMAINSCOPE_WEB}/domains/{domain}",
+        "source": "domainscope-db",
+    }
 
-    print(f"📊 Aggregated {len(domain_map)} unique MCP host domains from community, API and crawler runs.")
-    return list(domain_map.values())
-
-def process_single_domain(domain, raw_item, preloaded_intel):
-    try:
-        manifest = fetch_manifest_details(domain)
-        d_info = preloaded_intel.get(domain) or get_domain_details_fallback(domain)
-
-        title = raw_item.get("title") or manifest["title"]
-        desc = raw_item.get("description") or manifest["description"]
-        card_url = raw_item.get("card_url") or manifest["card_url"]
-        tools_count = raw_item.get("tools_count") if "tools_count" in raw_item else manifest["tools_count"]
-        category_override = raw_item.get("category")
-
-        # Check reachability directly on manifest or remote endpoint
-        card_reachable, latency = probe_endpoint(card_url, timeout=4)
-        if not card_reachable:
-            # Fallback probe to root domain
-            card_reachable, latency = probe_endpoint(f"https://{domain}", timeout=3)
-
-        category = category_override or categorize_server(domain, d_info, title, desc)
-
-        if not desc:
-            desc = d_info.get("summary") or ""
-        if not desc:
-            desc = f"{d_info.get('category', 'Technology')} platform & services."
-
-        return {
-            "domain": domain,
-            "title": title,
-            "description": desc[:300],
-            "category": category,
-            "domainscope_category": d_info.get("category", "Technology"),
-            "industry": d_info.get("industry", "Technology"),
-            "business_model": d_info.get("business_model", "B2B SaaS"),
-            "country": d_info.get("country", "Global"),
-            "city": d_info.get("city", ""),
-            "reachable": card_reachable,
-            "latency_ms": latency if latency is not None else 0,
-            "tools_count": tools_count,
-            "version": manifest.get("version", "1.0"),
-            "card_url": card_url,
-            "repo_url": raw_item.get("repo_url", ""),
-            "docs_url": raw_item.get("docs_url", ""),
-            "registry": raw_item.get("registry", ""),
-            "package": raw_item.get("package", ""),
-            "transport": raw_item.get("transport", ""),
-            "server_count": raw_item.get("server_count", 1),
-            "artifact_count": raw_item.get("artifact_count", 0),
-            "dossier_url": f"{DOMAINSCOPE_WEB}/domains/{domain}",
-            "source": raw_item.get("source", "crawler-batch"),
-        }
-    except Exception as e:
-        print(f"Warning: error processing {domain}: {e}")
-        return None
 
 def main():
-    raw_servers = collect_discovered_domains()
-    domains_list = [s["domain"] for s in raw_servers]
+    import argparse
+    ap = argparse.ArgumentParser(description="Regenerate the directory FROM DomainScope Postgres.")
+    ap.add_argument("--rows-json", help="offline: JSON {rows:[...], stats:{...}} exported from the database")
+    args = ap.parse_args()
 
-    # Preload all DomainScope firmographics in high-speed batch
-    intel_cache = batch_load_domainscope_intelligence(domains_list)
-
-    total_scanned = 450000 + len(raw_servers) * 100
-
-    # Process all domains concurrently
-    processed_servers = []
-    print(f"⚡ Inspecting {len(raw_servers)} live manifests and reachability benchmarks (32 threads)...")
-
-    with ThreadPoolExecutor(max_workers=32) as executor:
-        futures = {
-            executor.submit(process_single_domain, item["domain"], item, intel_cache): item["domain"]
-            for item in raw_servers
-        }
-
-        for f in as_completed(futures):
-            srv = f.result()
-            if srv:
-                processed_servers.append(srv)
-
-    # Sort servers by reachability (live first), then category, then domain
+    rows, stats, intel_cache = load_from_database(args.rows_json)
+    if intel_cache is None:
+        intel_cache = batch_load_domainscope_intelligence([r["domain"] for r in rows])
+    processed_servers = [build_server_entry(r, intel_cache) for r in rows]
     processed_servers.sort(key=lambda s: (not s["reachable"], s["category"], s["domain"]))
 
     active_count = sum(1 for s in processed_servers if s["reachable"])
-    total_count = len(processed_servers)
-    print(f"✅ Finished inspecting: {active_count}/{total_count} servers are LIVE & REACHABLE.")
+    print(f"✅ {len(processed_servers)} servers from the database; {active_count} pass a live MCP handshake.")
 
-    total_catalogs = sum(1 for s in processed_servers if "ai-catalog" in s.get("card_url", ""))
-
-    # Write Data Artifacts
+    total_scanned = int(stats["scanned"])
+    total_catalogs = int(stats["catalogs"])
     write_json(processed_servers, total_scanned, total_catalogs)
     write_csv(processed_servers)
     write_readme(processed_servers, total_scanned, total_catalogs, active_count)
-    print("🎉 Sync completed successfully! Enriched README.md, mcp-servers.json, and mcp-servers.csv.")
+    print("🎉 Sync completed: README.md, data/mcp-servers.json and data/mcp-servers.csv derived from Postgres.")
 
 def write_json(servers, total_scanned, total_catalogs):
     out = {
@@ -595,8 +438,8 @@ def write_readme(servers, total_scanned, total_catalogs, active_count):
         "> Concurrently probed, latency-benchmarked, and enriched by **[DomainScope at Scrape the World](https://domainscope.scrapetheworld.org)**.",
         "",
         f"[![Total Servers](https://img.shields.io/badge/MCP_Servers-{len(servers)}-purple?style=for-the-badge&logo=anthropic)](data/mcp-servers.json)",
-        f"[![Live Reachable](https://img.shields.io/badge/Live_Reachable-{active_count}%20Online-emerald?style=for-the-badge)](data/mcp-servers.json)",
-        f"[![Scanned Corpus](https://img.shields.io/badge/Scanned_Corpus-{get_total_scanned_corpus_str()}-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)",
+        f"[![Live Reachable](https://img.shields.io/badge/Handshake_Verified-{active_count}-emerald?style=for-the-badge)](data/mcp-servers.json)",
+        f"[![Scanned Corpus](https://img.shields.io/badge/Scanned_Corpus-{format_scanned(total_scanned)}_Domains_Scanned-blue?style=for-the-badge)](https://domainscope.scrapetheworld.org/mcp-directory)",
         f"[![Enriched by DomainScope](https://img.shields.io/badge/Intelligence-DomainScope_Graph-00D26A?style=for-the-badge&logo=databricks)](https://domainscope.scrapetheworld.org)",
         f"[![CI: Woodpecker](https://img.shields.io/badge/CI-Woodpecker_Self--Hosted-2088FF?style=for-the-badge&logo=linux)](https://ci.0exec.com)",
         "",
@@ -619,7 +462,7 @@ def write_readme(servers, total_scanned, total_catalogs, active_count):
         "## 🤖 Self-Evolving Autonomous Engine",
         "",
         "This directory is **not maintained by waiting for manual pull requests**. It is continuously discovered, updated, and verified by an autonomous internet-scale data pipeline:",
-        "1. **1.2M+ Domains Probed**: Ingests high-priority cohorts (developer documentation platforms, open-source repositories, API surfaces, AI ecosystem domains) from DomainScope's 13M+ domain graph.",
+        f"1. **{format_scanned(total_scanned)} domains scanned** (of DomainScope's 13M+): ingests high-priority cohorts (developer documentation platforms, open-source repositories, API surfaces, AI ecosystem domains) from DomainScope's 13M+ domain graph.",
         "2. **Standard & Streamable Detection**: Probes standard cards (`/.well-known/mcp/server-card.json`), streamable HTTP POST endpoints (`/api/mcp`), and AI catalogs (`/.well-known/ai-catalog.json`).",
         "3. **Live Health & Latency Telemetry**: Concurrently benchmarks round-trip latency (P50/P95) and verifies HTTP 200/204/401/403 states across 32 threads.",
         "4. **Firmographic Enrichment**: Enriches every host with DomainScope's verified business models, market taxonomy, and tech stack detection.",
@@ -734,7 +577,7 @@ def write_readme(servers, total_scanned, total_catalogs, active_count):
             "|---|---|:---:|:---:|:---:|:---:|:---:|",
         ]
         for s in cat_servers:
-            status_badge = "🟢 **Live**" if s["reachable"] else "🔴 *Down*"
+            status_badge = ("🟢 **Verified**" if s["reachable"] else ("🔴 *Unreachable*" if s.get("verification") == "unreachable" else "🟡 *Unverified*"))
             lat_str = f"{s['latency_ms']} ms" if s["latency_ms"] > 0 else "-"
             tools_str = str(s["tools_count"]) if s["tools_count"] > 0 else "✓"
             bm_badge = f"`{s['business_model']}`" if s.get("business_model") else "`B2B SaaS`"
@@ -760,7 +603,7 @@ def write_readme(servers, total_scanned, total_catalogs, active_count):
     lines.append("")
 
     # 3. Add Featured Multi-Tool & High-Capacity Servers Table in README.md
-    featured_servers = [s for s in servers if s.get("tools_count", 0) > 0 or s.get("source") == "community"]
+    featured_servers = [s for s in servers if s["reachable"]]
     # Sort by declared tools (descending), then latency (ascending)
     featured_servers.sort(key=lambda s: (-s.get("tools_count", 0), s.get("latency_ms", 9999)))
     # Limit to top 100 for fast, clean rendering under 150 KB
@@ -779,7 +622,7 @@ def write_readme(servers, total_scanned, total_catalogs, active_count):
         "|---|---|---|:---:|:---:|:---:|:---:|:---:|",
     ])
     for s in featured_slice:
-        status_badge = "🟢 **Live**" if s["reachable"] else "🔴 *Down*"
+        status_badge = ("🟢 **Verified**" if s["reachable"] else ("🔴 *Unreachable*" if s.get("verification") == "unreachable" else "🟡 *Unverified*"))
         lat_str = f"{s['latency_ms']} ms" if s["latency_ms"] > 0 else "-"
         tools_str = f"**{s['tools_count']} tools**" if s["tools_count"] > 0 else "✓"
         bm_badge = f"`{s['business_model']}`" if s.get("business_model") else "`B2B SaaS`"
