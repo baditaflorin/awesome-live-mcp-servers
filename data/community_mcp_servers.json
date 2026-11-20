@@ -25,5 +25,18 @@
     "tools_count": 12,
     "transport": "Streamable HTTP / JSON-RPC (Free tools + OAuth)",
     "source": "community-issue-2"
+  },
+  {
+    "domain": "firecrawl.dev",
+    "title": "Firecrawl",
+    "description": "Search, scrape and crawl the web, plus Firecrawl Alexandria's directory of data providers (https://alexandria.firecrawl.dev/).",
+    "card_url": "https://mcp.firecrawl.dev/v2/mcp",
+    "repo_url": "https://github.com/firecrawl/firecrawl-mcp-server",
+    "docs_url": "https://docs.firecrawl.dev/mcp-server",
+    "registry": "io.github.firecrawl/firecrawl-mcp-server",
+    "package": "npm: firecrawl-mcp",
+    "category": "🌐 Web Search, Crawling & Data Extraction",
+    "transport": "Streamable HTTP / JSON-RPC (keyless free tier; Bearer API key or OAuth for full tools)",
+    "source": "community-pr"
   }
 ]
